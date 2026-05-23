@@ -1,0 +1,7 @@
+{
+  "buildCommand": "npm run build && node scripts/gen-index.mjs",
+  "outputDirectory": "dist/client",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
