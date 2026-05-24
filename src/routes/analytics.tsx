@@ -62,13 +62,11 @@ function AnalyticsPage() {
       return { step: s.label, count, conv: i === 0 ? 100 : conv, dropoff: i === 0 ? 0 : 100 - conv };
     });
 
-    // bottleneck: largest drop between consecutive steps (excluding first)
     let bottleneckIdx = 1;
     for (let i = 2; i < funnel.length; i++) {
       if (funnel[i].dropoff > funnel[bottleneckIdx].dropoff) bottleneckIdx = i;
     }
 
-    // daily series
     const dayMap: Record<string, Record<string, Set<string>>> = {};
     for (const e of events) {
       const d = e.created_at.slice(0, 10);
@@ -83,7 +81,6 @@ function AnalyticsPage() {
       contact: dayMap[d].contact_click?.size ?? 0,
     }));
 
-    // district filter popularity
     const dist: Record<string, number> = {};
     for (const e of events) {
       if (e.event_type === "search_filter_apply" && e.event_data?.sigun_gu) {
@@ -91,7 +88,9 @@ function AnalyticsPage() {
         if (k !== "전체") dist[k] = (dist[k] || 0) + 1;
       }
     }
-    const districtChart = Object.entries(dist).map(([k, v]) => ({ name: k, count: v })).sort((a, b) => b.count - a.count);
+    const districtChart = Object.entries(dist)
+      .map(([k, v]) => ({ name: k, count: v }))
+      .sort((a, b) => b.count - a.count);
 
     const totalSessions = new Set(events.map((e) => e.session_id)).size;
     const overallConv = funnel[0].count > 0 ? (funnel[funnel.length - 1].count / funnel[0].count) * 100 : 0;
@@ -101,23 +100,28 @@ function AnalyticsPage() {
 
   if (isLoading || !stats) {
     return (
-      <div className="min-h-screen">
+      <div className="min-h-screen bg-[#F2F4F6]">
         <SiteHeader />
-        <div className="grid place-items-center py-24 text-muted-foreground">분석 데이터 집계 중...</div>
+        <div className="flex items-center justify-center py-24 text-[#8B95A1]">
+          분석 데이터 집계 중...
+        </div>
       </div>
     );
   }
 
   if (stats.totalSessions === 0) {
     return (
-      <div className="min-h-screen">
+      <div className="min-h-screen bg-[#F2F4F6]">
         <SiteHeader />
-        <div className="mx-auto max-w-3xl px-6 py-24 text-center">
-          <p className="text-sm font-semibold uppercase tracking-wider text-accent">아직 데이터가 없습니다</p>
-          <h1 className="mt-3 font-display text-3xl font-bold">사용자 행동 이벤트가 누적되면 자동으로 분석됩니다</h1>
-          <p className="mt-3 text-muted-foreground">
+        <div className="mx-auto max-w-3xl px-5 py-24 text-center">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#EFF6FF] px-3 py-1 text-xs font-semibold text-[#3182F6]">
+            아직 데이터가 없습니다
+          </span>
+          <h1 className="mt-5 text-3xl font-bold text-[#191F28]">
+            사용자 행동 이벤트가 누적되면 자동으로 분석됩니다
+          </h1>
+          <p className="mt-3 text-[#8B95A1]">
             홈 방문 → 검색 → 매물 조회 → 찜 → 문의로 이어지는 실제 클릭이 쌓이면 단계별 퍼널, 병목 구간, 인사이트가 이 화면에 나타납니다.
-            먼저 매물 검색 화면을 둘러보거나 관리자 페이지에서 실거래 데이터를 적재해 보세요.
           </p>
         </div>
       </div>
@@ -127,20 +131,21 @@ function AnalyticsPage() {
   const bottleneck = stats.funnel[stats.bottleneckIdx];
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-[#F2F4F6]">
       <SiteHeader />
 
       {/* Header */}
-      <div className="border-b border-border page-section-header">
-        <div className="mx-auto max-w-7xl px-6 py-10">
-          <p className="text-sm font-semibold uppercase tracking-wider text-accent">사용자 행동 분석</p>
-          <h1 className="mt-2 font-display text-4xl font-bold">퍼널 · 병목 · 인사이트</h1>
-          <p className="mt-3 max-w-2xl text-muted-foreground">최근 14일간 사용자 여정을 단계별로 분해하고, 가장 큰 이탈이 발생하는 구간을 자동으로 식별합니다.</p>
+      <div className="bg-white border-b border-[#E5E8EB]">
+        <div className="mx-auto max-w-7xl px-5 py-8">
+          <h1 className="text-2xl font-bold text-[#191F28]">분석 대시보드</h1>
+          <p className="mt-1 text-sm text-[#8B95A1]">
+            최근 14일간 사용자 여정을 단계별로 분해하고, 가장 큰 이탈이 발생하는 구간을 자동으로 식별합니다.
+          </p>
         </div>
       </div>
 
-      <div className="mx-auto max-w-7xl space-y-10 px-6 py-10">
-        {/* KPI cards */}
+      <div className="mx-auto max-w-7xl space-y-8 px-5 py-8">
+        {/* KPI Cards */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <KPI label="총 세션" value={stats.totalSessions.toLocaleString()} icon={Users} />
           <KPI label="홈 → 문의 전환율" value={`${stats.overallConv.toFixed(1)}%`} icon={TrendingDown} />
@@ -156,21 +161,40 @@ function AnalyticsPage() {
               const width = (f.count / max) * 100;
               const isBottleneck = i === stats.bottleneckIdx;
               return (
-                <div key={f.step} className={`rounded-xl border p-4 transition ${isBottleneck ? "border-destructive/40 bg-destructive/5" : "border-border bg-card"}`}>
+                <div
+                  key={f.step}
+                  className={`rounded-xl border p-4 transition ${
+                    isBottleneck
+                      ? "border-[#F04452]/40 bg-[#F04452]/5"
+                      : "border-[#E5E8EB] bg-white"
+                  }`}
+                >
                   <div className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-2 font-medium">
-                      <span className="grid h-6 w-6 place-items-center rounded-full bg-primary text-xs text-primary-foreground">{i + 1}</span>
+                    <div className="flex items-center gap-2 font-medium text-[#191F28]">
+                      <span className="grid h-6 w-6 place-items-center rounded-full bg-[#3182F6] text-xs text-white">
+                        {i + 1}
+                      </span>
                       {f.step}
-                      {isBottleneck && <span className="rounded-md bg-destructive/15 px-2 py-0.5 text-xs font-semibold text-destructive">병목</span>}
+                      {isBottleneck && (
+                        <span className="rounded-md bg-[#F04452]/15 px-2 py-0.5 text-xs font-semibold text-[#F04452]">
+                          병목
+                        </span>
+                      )}
                     </div>
-                    <div className="flex items-center gap-4 text-muted-foreground number-tabular">
+                    <div className="flex items-center gap-4 text-[#8B95A1] number-tabular">
                       <span>{f.count.toLocaleString()} 세션</span>
-                      {i > 0 && <span className={isBottleneck ? "font-semibold text-destructive" : ""}>전환 {f.conv.toFixed(1)}%</span>}
+                      {i > 0 && (
+                        <span className={isBottleneck ? "font-semibold text-[#F04452]" : ""}>
+                          전환 {f.conv.toFixed(1)}%
+                        </span>
+                      )}
                     </div>
                   </div>
-                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#F2F4F6]">
                     <div
-                      className={`h-full rounded-full transition-all ${isBottleneck ? "bg-destructive" : "bg-accent"}`}
+                      className={`h-full rounded-full transition-all ${
+                        isBottleneck ? "bg-[#F04452]" : "bg-[#3182F6]"
+                      }`}
                       style={{ width: `${width}%` }}
                     />
                   </div>
@@ -180,20 +204,27 @@ function AnalyticsPage() {
           </div>
         </Section>
 
-        {/* Daily trend + district chart */}
+        {/* Charts row */}
         <div className="grid gap-6 lg:grid-cols-2">
           <Section title="일별 트래픽 추이" subtitle="홈 방문, 매물 조회, 문의 클릭">
             <div className="h-72">
               <ResponsiveContainer>
                 <LineChart data={stats.daily}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.91 0.012 250)" />
-                  <XAxis dataKey="date" stroke="oklch(0.48 0.03 255)" fontSize={12} />
-                  <YAxis stroke="oklch(0.48 0.03 255)" fontSize={12} />
-                  <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid oklch(0.91 0.012 250)" }} />
-                  <Legend />
-                  <Line type="monotone" dataKey="home" stroke="oklch(0.22 0.07 260)" strokeWidth={2} name="홈 방문" />
-                  <Line type="monotone" dataKey="view" stroke="oklch(0.55 0.12 248)" strokeWidth={2} name="매물 조회" />
-                  <Line type="monotone" dataKey="contact" stroke="oklch(0.58 0.22 25)" strokeWidth={2} name="문의" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EB" />
+                  <XAxis dataKey="date" stroke="#8B95A1" fontSize={12} tick={{ fill: "#8B95A1" }} />
+                  <YAxis stroke="#8B95A1" fontSize={12} tick={{ fill: "#8B95A1" }} />
+                  <Tooltip
+                    contentStyle={{
+                      borderRadius: 12,
+                      border: "1px solid #E5E8EB",
+                      fontSize: 12,
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Line type="monotone" dataKey="home" stroke="#191F28" strokeWidth={2} name="홈 방문" dot={false} />
+                  <Line type="monotone" dataKey="view" stroke="#3182F6" strokeWidth={2} name="매물 조회" dot={false} />
+                  <Line type="monotone" dataKey="contact" stroke="#F04452" strokeWidth={2} name="문의" dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -203,11 +234,18 @@ function AnalyticsPage() {
             <div className="h-72">
               <ResponsiveContainer>
                 <BarChart data={stats.districtChart}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.91 0.012 250)" />
-                  <XAxis dataKey="name" stroke="oklch(0.48 0.03 255)" fontSize={12} />
-                  <YAxis stroke="oklch(0.48 0.03 255)" fontSize={12} />
-                  <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid oklch(0.91 0.012 250)" }} />
-                  <Bar dataKey="count" fill="oklch(0.34 0.08 258)" radius={[6, 6, 0, 0]} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EB" />
+                  <XAxis dataKey="name" stroke="#8B95A1" fontSize={12} tick={{ fill: "#8B95A1" }} />
+                  <YAxis stroke="#8B95A1" fontSize={12} tick={{ fill: "#8B95A1" }} />
+                  <Tooltip
+                    contentStyle={{
+                      borderRadius: 12,
+                      border: "1px solid #E5E8EB",
+                      fontSize: 12,
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
+                    }}
+                  />
+                  <Bar dataKey="count" fill="#3182F6" radius={[6, 6, 0, 0]} name="검색 횟수" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -229,7 +267,7 @@ function AnalyticsPage() {
             />
             <InsightCard
               title={`상위 자치구: ${stats.districtChart[0]?.name ?? "-"}`}
-              body={`해당 지역 매물 노출을 우선순위로 두고, 추천 모듈에 가중치를 부여하는 것을 고려하세요.`}
+              body="해당 지역 매물 노출을 우선순위로 두고, 추천 모듈에 가중치를 부여하는 것을 고려하세요."
               tone="info"
             />
             <InsightCard
@@ -248,22 +286,22 @@ function Section({ title, subtitle, children }: { title: string; subtitle?: stri
   return (
     <section>
       <div className="mb-5">
-        <h2 className="font-display text-xl font-bold">{title}</h2>
-        {subtitle && <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>}
+        <h2 className="text-xl font-bold text-[#191F28]">{title}</h2>
+        {subtitle && <p className="mt-1 text-sm text-[#8B95A1]">{subtitle}</p>}
       </div>
-      <div className="card-elevated rounded-2xl border border-border bg-card p-6">{children}</div>
+      <div className="card p-6">{children}</div>
     </section>
   );
 }
 
 function KPI({ label, value, icon: Icon, accent }: { label: string; value: string; icon: any; accent?: boolean }) {
   return (
-    <div className={`card-elevated rounded-2xl border bg-card p-5 ${accent ? "border-accent/40" : "border-border"}`}>
+    <div className={`card p-5 ${accent ? "border border-[#F04452]/30" : ""}`}>
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
-        <Icon className={`h-4 w-4 ${accent ? "text-accent" : "text-muted-foreground"}`} />
+        <span className="text-xs font-medium uppercase tracking-wider text-[#8B95A1]">{label}</span>
+        <Icon className={`h-4 w-4 ${accent ? "text-[#F04452]" : "text-[#8B95A1]"}`} />
       </div>
-      <div className="mt-3 font-display text-2xl font-bold number-tabular">{value}</div>
+      <div className="mt-3 text-2xl font-bold text-[#191F28] number-tabular">{value}</div>
     </div>
   );
 }
@@ -271,17 +309,17 @@ function KPI({ label, value, icon: Icon, accent }: { label: string; value: strin
 function InsightCard({ title, body, tone }: { title: string; body: string; tone: "danger" | "info" | "success" }) {
   const toneCls =
     tone === "danger"
-      ? "border-destructive/30 bg-destructive/5"
+      ? "border-[#F04452]/30 bg-[#F04452]/5"
       : tone === "success"
       ? "border-emerald-500/30 bg-emerald-500/5"
-      : "border-accent/30 bg-accent/5";
+      : "border-[#3182F6]/30 bg-[#EFF6FF]";
   return (
     <div className={`rounded-xl border p-5 ${toneCls}`}>
       <div className="flex items-start gap-3">
-        <Lightbulb className="mt-0.5 h-5 w-5 text-accent" />
+        <Lightbulb className="mt-0.5 h-5 w-5 text-[#3182F6]" />
         <div>
-          <h4 className="font-semibold">{title}</h4>
-          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{body}</p>
+          <h4 className="font-semibold text-[#191F28]">{title}</h4>
+          <p className="mt-1 text-sm leading-relaxed text-[#8B95A1]">{body}</p>
         </div>
       </div>
     </div>

@@ -14,6 +14,57 @@ export type Database = {
   }
   public: {
     Tables: {
+      apartments: {
+        Row: {
+          id: string
+          apt_name: string | null
+          sigun_gu: string
+          dong: string | null
+          jibun: string | null
+          road_address: string | null
+          area_sqm: number | null
+          floor: number | null
+          building_year: number | null
+          contract_year: number
+          contract_month: number
+          contract_day: number | null
+          price_man_won: number
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          apt_name?: string | null
+          sigun_gu: string
+          dong?: string | null
+          jibun?: string | null
+          road_address?: string | null
+          area_sqm?: number | null
+          floor?: number | null
+          building_year?: number | null
+          contract_year: number
+          contract_month: number
+          contract_day?: number | null
+          price_man_won: number
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          apt_name?: string | null
+          sigun_gu?: string
+          dong?: string | null
+          jibun?: string | null
+          road_address?: string | null
+          area_sqm?: number | null
+          floor?: number | null
+          building_year?: number | null
+          contract_year?: number
+          contract_month?: number
+          contract_day?: number | null
+          price_man_won?: number
+          created_at?: string | null
+        }
+        Relationships: []
+      }
       favorites: {
         Row: {
           created_at: string | null

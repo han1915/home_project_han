@@ -5,7 +5,7 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, CartesianGrid,
   ResponsiveContainer, Legend, BarChart, Cell,
 } from "recharts";
-import { Activity, BarChart2, TrendingUp, TrendingDown, Minus, Info } from "lucide-react";
+import { Activity, BarChart2, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { SiteHeader } from "@/components/SiteHeader";
 import { supabase } from "@/integrations/supabase/client";
 import { trackEvent } from "@/lib/tracking";
@@ -14,26 +14,28 @@ export const Route = createFileRoute("/market")({
   head: () => ({
     meta: [
       { title: "시세 분석 · HomeDirect" },
-      { name: "description", content: "서울 아파트 구별 시세 예측, 월별 이동평균, 가격대 분포 분석" },
+      { name: "description", content: "서울 아파트 구별 시세 분석, 월별 이동평균, 가격대 분포" },
     ],
   }),
   component: MarketPage,
 });
 
-type Property = {
+type Apt = {
   id: string;
   sigun_gu: string | null;
-  price_ten_thousand: number | null;
+  price_man_won: number | null;
   area_sqm: number | null;
-  contract_date: string | null;
-  contract_month: string | null;
+  contract_year: number | null;
+  contract_month: number | null;
 };
 
 function fmtPrice(p: number | null | undefined) {
   if (!p) return "-";
   const eok = Math.floor(p / 10000);
   const man = p % 10000;
-  return eok > 0 ? `${eok}억 ${man ? man.toLocaleString() + "만" : ""}`.trim() : `${man.toLocaleString()}만`;
+  if (eok > 0 && man > 0) return `${eok}억 ${man.toLocaleString()}만`;
+  if (eok > 0) return `${eok}억`;
+  return `${man.toLocaleString()}만`;
 }
 
 function calcStats(prices: number[]) {
@@ -78,17 +80,21 @@ const PRICE_BUCKETS = [
 ];
 
 const BAR_COLORS = [
-  "oklch(0.72 0.10 230)",
-  "oklch(0.62 0.11 240)",
-  "oklch(0.55 0.12 248)",
-  "oklch(0.44 0.10 255)",
-  "oklch(0.34 0.08 258)",
-  "oklch(0.28 0.08 260)",
-  "oklch(0.22 0.07 260)",
+  "#BFDBFE",
+  "#93C5FD",
+  "#60A5FA",
+  "#3B82F6",
+  "#2563EB",
+  "#1D4ED8",
+  "#1E40AF",
 ];
 
 function pad(n: number) {
   return n < 10 ? `0${n}` : `${n}`;
+}
+
+function ymKey(year: number, month: number) {
+  return `${year}-${pad(month)}`;
 }
 
 function MarketPage() {
@@ -98,19 +104,17 @@ function MarketPage() {
   const [endMonth, setEndMonth] = useState(now.getMonth() + 1);
   const [periodMonths, setPeriodMonths] = useState(12);
 
-  useEffect(() => {
-    trackEvent("market_view");
-  }, []);
+  useEffect(() => { trackEvent("market_view"); }, []);
 
   const { data: rawData, isLoading } = useQuery({
-    queryKey: ["market_properties"],
+    queryKey: ["market_apartments"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("properties")
-        .select("id, sigun_gu, price_ten_thousand, area_sqm, contract_date, contract_month")
+        .from("apartments")
+        .select("id,sigun_gu,price_man_won,area_sqm,contract_year,contract_month")
         .limit(10000);
       if (error) throw error;
-      return data as Property[];
+      return data as Apt[];
     },
   });
 
@@ -124,26 +128,19 @@ function MarketPage() {
 
   const availableYears = useMemo(() => {
     if (!rawData) return [now.getFullYear()];
-    const years = [
-      ...new Set(
-        rawData
-          .map((p) => p.contract_month?.slice(0, 4))
-          .filter(Boolean) as string[],
-      ),
-    ]
-      .map(Number)
+    const years = [...new Set(rawData.map((p) => p.contract_year).filter(Boolean) as number[])]
       .sort((a, b) => b - a);
     return years.length ? years : [now.getFullYear()];
   }, [rawData]);
 
-  // ── 자치구별 시세 통계 (시세 예측 테이블) ──────────────────────────
+  // District stats table
   const districtStats = useMemo(() => {
     if (!rawData) return [];
     const grouped: Record<string, number[]> = {};
     for (const p of rawData) {
       const k = p.sigun_gu ?? "기타";
       if (!grouped[k]) grouped[k] = [];
-      if (p.price_ten_thousand) grouped[k].push(p.price_ten_thousand);
+      if (p.price_man_won) grouped[k].push(p.price_man_won);
     }
     return Object.entries(grouped)
       .map(([district, prices]) => {
@@ -155,14 +152,13 @@ function MarketPage() {
       .sort((a, b) => b.mean - a.mean);
   }, [rawData]);
 
-  // ── 월별 추이 (선택 구 + 기간) ──────────────────────────────────────
+  // Monthly trend
   const monthlyTrend = useMemo(() => {
     if (!rawData) return [];
-
     const months: string[] = [];
     for (let i = periodMonths - 1; i >= 0; i--) {
       const d = new Date(endYear, endMonth - 1 - i, 1);
-      months.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`);
+      months.push(ymKey(d.getFullYear(), d.getMonth() + 1));
     }
 
     const filtered = rawData.filter(
@@ -172,8 +168,11 @@ function MarketPage() {
     const byMonth: Record<string, number[]> = {};
     for (const m of months) byMonth[m] = [];
     for (const p of filtered) {
-      if (p.contract_month && byMonth[p.contract_month] !== undefined && p.price_ten_thousand) {
-        byMonth[p.contract_month].push(p.price_ten_thousand);
+      if (p.contract_year && p.contract_month) {
+        const key = ymKey(p.contract_year, p.contract_month);
+        if (byMonth[key] !== undefined && p.price_man_won) {
+          byMonth[key].push(p.price_man_won);
+        }
       }
     }
 
@@ -194,12 +193,12 @@ function MarketPage() {
     }));
   }, [rawData, selectedDistrict, endYear, endMonth, periodMonths]);
 
-  // ── 가격대 분포 ──────────────────────────────────────────────────────
+  // Price distribution
   const priceDistribution = useMemo(() => {
     if (!rawData) return [];
     const prices = rawData
       .filter((p) => selectedDistrict === "전체" || p.sigun_gu === selectedDistrict)
-      .map((p) => p.price_ten_thousand)
+      .map((p) => p.price_man_won)
       .filter((p): p is number => p !== null);
     const total = prices.length;
     if (!total) return [];
@@ -209,39 +208,41 @@ function MarketPage() {
     }).filter((b) => b.count > 0);
   }, [rawData, selectedDistrict]);
 
-  // ── 선택 구 전체 통계 ────────────────────────────────────────────────
+  // Overview stats
   const overviewStats = useMemo(() => {
     if (!rawData) return null;
     const prices = rawData
       .filter((p) => selectedDistrict === "전체" || p.sigun_gu === selectedDistrict)
-      .map((p) => p.price_ten_thousand)
+      .map((p) => p.price_man_won)
       .filter((p): p is number => p !== null);
     return calcStats(prices);
   }, [rawData, selectedDistrict]);
 
-  // ── 최근 거래 급등/급락 구 ───────────────────────────────────────────
+  // Momentum (month-over-month change)
   const momentum = useMemo(() => {
     if (!rawData || districtStats.length === 0) return [];
     const sorted = [...rawData]
-      .filter((p) => p.contract_month)
-      .sort((a, b) => (b.contract_month ?? "").localeCompare(a.contract_month ?? ""));
+      .filter((p) => p.contract_year && p.contract_month)
+      .sort((a, b) => {
+        const ka = ymKey(a.contract_year!, a.contract_month!);
+        const kb = ymKey(b.contract_year!, b.contract_month!);
+        return kb.localeCompare(ka);
+      });
 
-    const latestMonth = sorted[0]?.contract_month;
-    if (!latestMonth) return [];
+    const latestKey = sorted[0] ? ymKey(sorted[0].contract_year!, sorted[0].contract_month!) : null;
+    if (!latestKey) return [];
 
-    const prevMonthDate = new Date(
-      Number(latestMonth.slice(0, 4)),
-      Number(latestMonth.slice(5, 7)) - 2,
-      1,
-    );
-    const prevMonth = `${prevMonthDate.getFullYear()}-${pad(prevMonthDate.getMonth() + 1)}`;
+    const [ly, lm] = latestKey.split("-").map(Number);
+    const prevDate = new Date(ly, lm - 2, 1);
+    const prevKey = ymKey(prevDate.getFullYear(), prevDate.getMonth() + 1);
 
     const byDistrict: Record<string, { latest: number[]; prev: number[] }> = {};
     for (const p of rawData) {
-      if (!p.sigun_gu || !p.price_ten_thousand || !p.contract_month) continue;
+      if (!p.sigun_gu || !p.price_man_won || !p.contract_year || !p.contract_month) continue;
+      const key = ymKey(p.contract_year, p.contract_month);
       if (!byDistrict[p.sigun_gu]) byDistrict[p.sigun_gu] = { latest: [], prev: [] };
-      if (p.contract_month === latestMonth) byDistrict[p.sigun_gu].latest.push(p.price_ten_thousand);
-      if (p.contract_month === prevMonth) byDistrict[p.sigun_gu].prev.push(p.price_ten_thousand);
+      if (key === latestKey) byDistrict[p.sigun_gu].latest.push(p.price_man_won);
+      if (key === prevKey) byDistrict[p.sigun_gu].prev.push(p.price_man_won);
     }
 
     return Object.entries(byDistrict)
@@ -259,9 +260,9 @@ function MarketPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen">
+      <div className="min-h-screen bg-[#F2F4F6]">
         <SiteHeader />
-        <div className="grid place-items-center py-24 text-muted-foreground">
+        <div className="flex items-center justify-center py-24 text-[#8B95A1]">
           시세 데이터 집계 중...
         </div>
       </div>
@@ -270,16 +271,13 @@ function MarketPage() {
 
   if (!rawData?.length) {
     return (
-      <div className="min-h-screen">
+      <div className="min-h-screen bg-[#F2F4F6]">
         <SiteHeader />
-        <div className="mx-auto max-w-3xl px-6 py-24 text-center">
-          <p className="text-sm font-semibold uppercase tracking-wider text-accent">데이터 없음</p>
-          <h1 className="mt-3 font-display text-3xl font-bold">
-            실거래 데이터를 먼저 적재해 주세요
-          </h1>
-          <p className="mt-3 text-muted-foreground">
-            데이터 적재 페이지에서 국토부 실거래가 데이터를 가져오면 시세 분석이 자동으로
-            시작됩니다.
+        <div className="mx-auto max-w-3xl px-5 py-24 text-center">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#EFF6FF] px-3 py-1 text-xs font-semibold text-[#3182F6]">데이터 없음</span>
+          <h1 className="mt-5 text-3xl font-bold text-[#191F28]">실거래 데이터를 먼저 적재해 주세요</h1>
+          <p className="mt-3 text-[#8B95A1]">
+            관리자 페이지에서 국토부 실거래가 데이터를 가져오면 시세 분석이 자동으로 시작됩니다.
           </p>
         </div>
       </div>
@@ -289,134 +287,99 @@ function MarketPage() {
   const globalMaxUpper = districtStats[0]?.upper ?? 1;
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-[#F2F4F6]">
       <SiteHeader />
 
-      {/* ─── 페이지 헤더 ─── */}
-      <div className="market-page-header border-b border-border">
-        <div className="mx-auto max-w-7xl px-6 py-10">
-          <p className="text-sm font-semibold uppercase tracking-wider text-accent">
-            서울 아파트 실거래
-          </p>
-          <h1 className="mt-2 font-display text-4xl font-bold">시세 분석</h1>
-          <p className="mt-3 max-w-2xl text-muted-foreground">
-            구별 평균·표준편차 기반 시세 범위, 월별 이동평균(MA), 가격대 분포를 한눈에 확인하세요.
+      {/* Page Header */}
+      <div className="bg-white border-b border-[#E5E8EB]">
+        <div className="mx-auto max-w-7xl px-5 py-8">
+          <h1 className="text-2xl font-bold text-[#191F28]">시세 분석</h1>
+          <p className="mt-1 text-sm text-[#8B95A1]">
+            구별 평균·표준편차 기반 시세 범위, 월별 이동평균(MA), 가격대 분포
           </p>
         </div>
       </div>
 
-      <div className="mx-auto max-w-7xl space-y-10 px-6 py-10">
+      <div className="mx-auto max-w-7xl space-y-8 px-5 py-8">
 
-        {/* ─── 컨트롤 바 ─── */}
-        <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-border bg-card p-5 card-elevated">
+        {/* Controls */}
+        <div className="card p-5 flex flex-wrap items-center gap-4">
           <FilterSelect label="자치구" value={selectedDistrict} onChange={setSelectedDistrict}>
-            {districts.map((d) => (
-              <option key={d}>{d}</option>
-            ))}
+            {districts.map((d) => <option key={d}>{d}</option>)}
           </FilterSelect>
           <FilterSelect label="기준 년도" value={String(endYear)} onChange={(v) => setEndYear(Number(v))}>
-            {availableYears.map((y) => (
-              <option key={y}>{y}</option>
-            ))}
+            {availableYears.map((y) => <option key={y}>{y}</option>)}
           </FilterSelect>
           <FilterSelect label="기준 월" value={String(endMonth)} onChange={(v) => setEndMonth(Number(v))}>
             {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-              <option key={m} value={m}>
-                {m}월
-              </option>
+              <option key={m} value={m}>{m}월</option>
             ))}
           </FilterSelect>
-          <FilterSelect
-            label="조회 기간"
-            value={String(periodMonths)}
-            onChange={(v) => setPeriodMonths(Number(v))}
-          >
+          <FilterSelect label="조회 기간" value={String(periodMonths)} onChange={(v) => setPeriodMonths(Number(v))}>
             {[6, 12, 24].map((m) => (
-              <option key={m} value={m}>
-                {m}개월
-              </option>
+              <option key={m} value={m}>{m}개월</option>
             ))}
           </FilterSelect>
         </div>
 
-        {/* ─── KPI 카드 ─── */}
+        {/* KPI Cards */}
         {overviewStats && (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard
-              label="평균 거래가"
-              value={fmtPrice(overviewStats.mean)}
-              sub={`${overviewStats.count.toLocaleString()}건 기준`}
-            />
-            <StatCard
-              label="중위 거래가"
-              value={fmtPrice(overviewStats.median)}
-              sub="상·하위 이상치 영향 최소화"
-            />
-            <StatCard
-              label="시세 하한"
-              value={fmtPrice(overviewStats.lower)}
-              sub="평균 − 1σ (표준편차)"
-              tone="neutral"
-            />
-            <StatCard
-              label="시세 상한"
-              value={fmtPrice(overviewStats.upper)}
-              sub="평균 + 1σ (표준편차)"
-              tone="accent"
-            />
+            <StatCard label="평균 거래가" value={fmtPrice(overviewStats.mean)} sub={`${overviewStats.count.toLocaleString()}건 기준`} />
+            <StatCard label="중위 거래가" value={fmtPrice(overviewStats.median)} sub="이상치 영향 최소화" />
+            <StatCard label="거래량" value={overviewStats.count.toLocaleString()} sub="전체 데이터 건수" />
+            <StatCard label="최고가" value={fmtPrice(overviewStats.max)} sub="데이터 내 최고 거래가" tone="accent" />
           </div>
         )}
 
-        {/* ─── 월별 평균 거래가 (이동평균 포함) ─── */}
+        {/* Monthly Trend Chart */}
         <Section
           title="월별 평균 거래가"
-          subtitle={`${selectedDistrict} · MA3(단기) · MA6(중기) 보조 지표 포함`}
-          icon={<Activity className="h-5 w-5 text-accent" />}
+          subtitle={`${selectedDistrict} · MA3(단기) · MA6(중기) 보조지표 포함`}
+          icon={<Activity className="h-5 w-5 text-[#3182F6]" />}
         >
           <div className="h-80">
             <ResponsiveContainer>
               <ComposedChart data={monthlyTrend} margin={{ top: 10, right: 16, bottom: 0, left: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.91 0.012 250)" />
-                <XAxis dataKey="month" stroke="oklch(0.48 0.03 255)" fontSize={11} tick={{ fill: "oklch(0.48 0.03 255)" }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EB" />
+                <XAxis dataKey="month" stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} />
                 <YAxis
                   yAxisId="price"
                   orientation="left"
-                  stroke="oklch(0.48 0.03 255)"
+                  stroke="#8B95A1"
                   fontSize={11}
-                  tick={{ fill: "oklch(0.48 0.03 255)" }}
+                  tick={{ fill: "#8B95A1" }}
                   tickFormatter={(v) => `${(v / 10000).toFixed(0)}억`}
                   width={52}
                 />
                 <YAxis
                   yAxisId="count"
                   orientation="right"
-                  stroke="oklch(0.72 0.10 230)"
+                  stroke="#8B95A1"
                   fontSize={11}
-                  tick={{ fill: "oklch(0.72 0.10 230)" }}
+                  tick={{ fill: "#8B95A1" }}
                   tickFormatter={(v) => `${v}건`}
                   width={44}
                 />
                 <Tooltip
                   contentStyle={{
                     borderRadius: 12,
-                    border: "1px solid oklch(0.91 0.012 250)",
+                    border: "1px solid #E5E8EB",
                     fontSize: 12,
-                    boxShadow: "0 8px 24px oklch(0.22 0.07 260 / 0.10)",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
                   }}
                   formatter={(value: number, name: string) => {
                     if (name === "거래량") return [`${value?.toLocaleString() ?? 0}건`, name];
                     return [fmtPrice(value), name];
                   }}
                 />
-                <Legend
-                  wrapperStyle={{ fontSize: 12, paddingTop: 12 }}
-                />
+                <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
                 <Bar
                   yAxisId="count"
                   dataKey="count"
                   name="거래량"
-                  fill="oklch(0.85 0.06 230)"
-                  opacity={0.45}
+                  fill="#BFDBFE"
+                  opacity={0.7}
                   radius={[3, 3, 0, 0]}
                 />
                 <Line
@@ -424,7 +387,7 @@ function MarketPage() {
                   type="monotone"
                   dataKey="avgPrice"
                   name="평균 거래가"
-                  stroke="oklch(0.22 0.07 260)"
+                  stroke="#191F28"
                   strokeWidth={2.5}
                   dot={false}
                   connectNulls
@@ -434,7 +397,7 @@ function MarketPage() {
                   type="monotone"
                   dataKey="ma3"
                   name="MA3 단기"
-                  stroke="oklch(0.55 0.12 248)"
+                  stroke="#3182F6"
                   strokeWidth={2}
                   strokeDasharray="7 3"
                   dot={false}
@@ -445,7 +408,7 @@ function MarketPage() {
                   type="monotone"
                   dataKey="ma6"
                   name="MA6 중기"
-                  stroke="oklch(0.58 0.22 25)"
+                  stroke="#F04452"
                   strokeWidth={2}
                   strokeDasharray="3 5"
                   dot={false}
@@ -454,25 +417,25 @@ function MarketPage() {
               </ComposedChart>
             </ResponsiveContainer>
           </div>
-          <div className="mt-4 rounded-xl bg-secondary/50 px-4 py-3">
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              <span className="font-semibold text-foreground">MA3(단기)</span>는 최근 3개월 이동평균으로 단기 추세 반전을,{" "}
-              <span className="font-semibold text-foreground">MA6(중기)</span>는 6개월 이동평균으로 중기 시장 방향을 나타냅니다.
+          <div className="mt-4 rounded-xl bg-[#F2F4F6] px-4 py-3">
+            <p className="text-xs leading-relaxed text-[#8B95A1]">
+              <span className="font-semibold text-[#191F28]">MA3(단기)</span>는 최근 3개월 이동평균으로 단기 추세 반전을,{" "}
+              <span className="font-semibold text-[#191F28]">MA6(중기)</span>는 6개월 이동평균으로 중기 시장 방향을 나타냅니다.
               평균가가 MA6 위에 있으면 상승 흐름, 아래면 하락 흐름으로 해석합니다.
             </p>
           </div>
         </Section>
 
-        {/* ─── 자치구별 시세 예측 ─── */}
+        {/* District Comparison Table */}
         <Section
-          title="자치구별 시세 예측"
+          title="자치구별 시세 비교"
           subtitle="평균가 ± 표준편차(1σ) 기반 정상 거래 범위 · 행 클릭 시 해당 구로 전환"
-          icon={<BarChart2 className="h-5 w-5 text-accent" />}
+          icon={<BarChart2 className="h-5 w-5 text-[#3182F6]" />}
         >
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-border text-xs text-muted-foreground">
+                <tr className="border-b border-[#E5E8EB] text-xs text-[#8B95A1]">
                   <th className="pb-3 text-left font-medium">자치구</th>
                   <th className="pb-3 text-right font-medium">거래건수</th>
                   <th className="pb-3 text-right font-medium">중위가</th>
@@ -492,37 +455,29 @@ function MarketPage() {
                     <tr
                       key={s.district}
                       onClick={() => setSelectedDistrict(s.district)}
-                      className={`cursor-pointer border-b border-border/50 transition hover:bg-secondary/40 ${
-                        isSelected ? "bg-accent/8" : ""
+                      className={`cursor-pointer border-b border-[#E5E8EB]/50 transition hover:bg-[#F2F4F6] ${
+                        isSelected ? "bg-[#EFF6FF]" : ""
                       }`}
                     >
-                      <td className={`py-3 font-medium ${isSelected ? "text-accent" : ""}`}>
+                      <td className={`py-3 font-medium ${isSelected ? "text-[#3182F6]" : "text-[#191F28]"}`}>
                         {s.district}
                       </td>
-                      <td className="py-3 text-right text-muted-foreground number-tabular">
-                        {s.count.toLocaleString()}
-                      </td>
+                      <td className="py-3 text-right text-[#8B95A1] number-tabular">{s.count.toLocaleString()}</td>
                       <td className="py-3 text-right number-tabular">{fmtPrice(s.median)}</td>
-                      <td className="py-3 text-right font-semibold number-tabular">
-                        {fmtPrice(s.mean)}
-                      </td>
-                      <td className="py-3 text-right text-muted-foreground number-tabular">
-                        {fmtPrice(s.lower)}
-                      </td>
-                      <td className="py-3 text-right text-muted-foreground number-tabular">
-                        {fmtPrice(s.upper)}
-                      </td>
+                      <td className="py-3 text-right font-semibold number-tabular">{fmtPrice(s.mean)}</td>
+                      <td className="py-3 text-right text-[#8B95A1] number-tabular">{fmtPrice(s.lower)}</td>
+                      <td className="py-3 text-right text-[#8B95A1] number-tabular">{fmtPrice(s.upper)}</td>
                       <td className="py-3 pl-6">
-                        <div className="relative h-3 w-36 overflow-hidden rounded-full bg-muted">
+                        <div className="relative h-3 w-36 overflow-hidden rounded-full bg-[#F2F4F6]">
                           <div
-                            className="absolute h-full rounded-full bg-accent/25"
+                            className="absolute h-full rounded-full bg-[#3182F6]/20"
                             style={{
                               left: `${lowerPct}%`,
                               width: `${Math.max(0, upperPct - lowerPct)}%`,
                             }}
                           />
                           <div
-                            className="absolute top-0.5 h-2 w-1 rounded-sm bg-accent"
+                            className="absolute top-0.5 h-2 w-1 rounded-sm bg-[#3182F6]"
                             style={{ left: `${meanPct}%` }}
                           />
                         </div>
@@ -533,44 +488,38 @@ function MarketPage() {
               </tbody>
             </table>
           </div>
-          <div className="mt-4 flex items-start gap-2 rounded-xl bg-secondary/50 px-4 py-3">
-            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <p className="text-xs text-muted-foreground">
-              시세 하한/상한 = 평균 ± 표준편차(1σ). 정규분포 가정 시 전체 거래의 약 <strong className="text-foreground">68%</strong>가 이 구간 내에 분포합니다.
-              중위가는 상·하위 이상 거래의 영향을 받지 않아 실제 시장 체감가에 더 가깝습니다.
+          <div className="mt-4 rounded-xl bg-[#F2F4F6] px-4 py-3">
+            <p className="text-xs text-[#8B95A1]">
+              시세 하한/상한 = 평균 ± 표준편차(1σ). 정규분포 가정 시 전체 거래의 약{" "}
+              <strong className="text-[#191F28]">68%</strong>가 이 구간 내에 분포합니다.
             </p>
           </div>
         </Section>
 
-        {/* ─── 가격대 분포 ─── */}
+        {/* Price Distribution Chart */}
         <Section
           title="가격대 분포"
           subtitle={`${selectedDistrict} 실거래 건수 비중`}
-          icon={<BarChart2 className="h-5 w-5 text-accent" />}
+          icon={<BarChart2 className="h-5 w-5 text-[#3182F6]" />}
         >
           <div className="h-64">
             <ResponsiveContainer>
               <BarChart data={priceDistribution} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.91 0.012 250)" vertical={false} />
-                <XAxis
-                  dataKey="label"
-                  stroke="oklch(0.48 0.03 255)"
-                  fontSize={12}
-                  tick={{ fill: "oklch(0.48 0.03 255)" }}
-                />
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EB" vertical={false} />
+                <XAxis dataKey="label" stroke="#8B95A1" fontSize={12} tick={{ fill: "#8B95A1" }} />
                 <YAxis
-                  stroke="oklch(0.48 0.03 255)"
+                  stroke="#8B95A1"
                   fontSize={12}
-                  tick={{ fill: "oklch(0.48 0.03 255)" }}
+                  tick={{ fill: "#8B95A1" }}
                   tickFormatter={(v) => `${v}건`}
                   width={48}
                 />
                 <Tooltip
                   contentStyle={{
                     borderRadius: 12,
-                    border: "1px solid oklch(0.91 0.012 250)",
+                    border: "1px solid #E5E8EB",
                     fontSize: 12,
-                    boxShadow: "0 8px 24px oklch(0.22 0.07 260 / 0.10)",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
                   }}
                   formatter={(value: number, _: string, { payload }: any) => [
                     `${value.toLocaleString()}건 · 전체의 ${payload.pct}%`,
@@ -579,10 +528,7 @@ function MarketPage() {
                 />
                 <Bar dataKey="count" name="거래건수" radius={[6, 6, 0, 0]}>
                   {priceDistribution.map((_, idx) => (
-                    <Cell
-                      key={idx}
-                      fill={BAR_COLORS[Math.min(idx, BAR_COLORS.length - 1)]}
-                    />
+                    <Cell key={idx} fill={BAR_COLORS[Math.min(idx, BAR_COLORS.length - 1)]} />
                   ))}
                 </Bar>
               </BarChart>
@@ -592,7 +538,7 @@ function MarketPage() {
             {priceDistribution.map((b, idx) => (
               <span
                 key={b.label}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1 text-xs"
+                className="inline-flex items-center gap-1.5 rounded-full border border-[#E5E8EB] px-3 py-1 text-xs"
               >
                 <span
                   className="inline-block h-2 w-2 rounded-full"
@@ -604,12 +550,12 @@ function MarketPage() {
           </div>
         </Section>
 
-        {/* ─── 구별 거래가 변동 현황 ─── */}
+        {/* Momentum */}
         {momentum.length > 0 && (
           <Section
             title="구별 최근 거래가 변동"
             subtitle="직전 월 대비 평균 거래가 등락률 (데이터 충분한 구 기준)"
-            icon={<TrendingUp className="h-5 w-5 text-accent" />}
+            icon={<TrendingUp className="h-5 w-5 text-[#3182F6]" />}
           >
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {momentum.map((m) => {
@@ -619,21 +565,17 @@ function MarketPage() {
                   <button
                     key={m.district}
                     onClick={() => setSelectedDistrict(m.district)}
-                    className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3 text-left transition hover:border-accent/50 hover:bg-secondary/30"
+                    className="flex items-center justify-between rounded-xl border border-[#E5E8EB] bg-white px-4 py-3 text-left transition hover:border-[#3182F6]/50 hover:bg-[#F2F4F6]"
                   >
                     <div>
-                      <div className="font-medium">{m.district}</div>
-                      <div className="mt-0.5 text-xs text-muted-foreground number-tabular">
+                      <div className="font-medium text-[#191F28]">{m.district}</div>
+                      <div className="mt-0.5 text-xs text-[#8B95A1] number-tabular">
                         {fmtPrice(m.latestMean)}
                       </div>
                     </div>
                     <div
                       className={`flex items-center gap-1 text-sm font-bold number-tabular ${
-                        flat
-                          ? "text-muted-foreground"
-                          : up
-                          ? "text-emerald-600"
-                          : "text-destructive"
+                        flat ? "text-[#8B95A1]" : up ? "text-emerald-600" : "text-[#F04452]"
                       }`}
                     >
                       {flat ? (
@@ -643,8 +585,7 @@ function MarketPage() {
                       ) : (
                         <TrendingDown className="h-4 w-4" />
                       )}
-                      {up ? "+" : ""}
-                      {m.changePct}%
+                      {up ? "+" : ""}{m.changePct}%
                     </div>
                   </button>
                 );
@@ -656,8 +597,6 @@ function MarketPage() {
     </div>
   );
 }
-
-// ── 공통 컴포넌트 ──────────────────────────────────────────────────────
 
 function FilterSelect({
   label,
@@ -672,13 +611,13 @@ function FilterSelect({
 }) {
   return (
     <div className="flex items-center gap-2">
-      <label className="whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+      <label className="whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-[#8B95A1]">
         {label}
       </label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-accent/40"
+        className="rounded-lg border border-[#E5E8EB] bg-white px-3 py-1.5 text-sm text-[#191F28] transition focus:outline-none focus:ring-2 focus:ring-[#3182F6]/40"
       >
         {children}
       </select>
@@ -695,25 +634,15 @@ function StatCard({
   label: string;
   value: string;
   sub?: string;
-  tone?: "accent" | "neutral";
+  tone?: "accent";
 }) {
   return (
-    <div className="card-elevated rounded-2xl border border-border bg-card p-5">
-      <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
-      <div
-        className={`mt-2 font-display text-2xl font-bold number-tabular ${
-          tone === "accent"
-            ? "text-accent"
-            : tone === "neutral"
-            ? "text-muted-foreground"
-            : "text-primary"
-        }`}
-      >
+    <div className="card p-5">
+      <div className="text-xs font-medium uppercase tracking-wider text-[#8B95A1]">{label}</div>
+      <div className={`mt-2 text-2xl font-bold number-tabular ${tone === "accent" ? "text-[#3182F6]" : "text-[#191F28]"}`}>
         {value}
       </div>
-      {sub && <div className="mt-1 text-xs text-muted-foreground">{sub}</div>}
+      {sub && <div className="mt-1 text-xs text-[#8B95A1]">{sub}</div>}
     </div>
   );
 }
@@ -733,16 +662,16 @@ function Section({
     <section>
       <div className="mb-5 flex items-center gap-3">
         {icon && (
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-secondary">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#EFF6FF]">
             {icon}
           </div>
         )}
         <div>
-          <h2 className="font-display text-xl font-bold">{title}</h2>
-          {subtitle && <p className="mt-0.5 text-sm text-muted-foreground">{subtitle}</p>}
+          <h2 className="text-xl font-bold text-[#191F28]">{title}</h2>
+          {subtitle && <p className="mt-0.5 text-sm text-[#8B95A1]">{subtitle}</p>}
         </div>
       </div>
-      <div className="card-elevated rounded-2xl border border-border bg-card p-6">{children}</div>
+      <div className="card p-6">{children}</div>
     </section>
   );
 }

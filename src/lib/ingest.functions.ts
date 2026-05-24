@@ -32,24 +32,22 @@ const SEOUL_DISTRICTS: { code: string; name: string }[] = [
   { code: "11740", name: "강동구" },
 ];
 
-const MAX_ROWS = 10000;
-const PER_CALL = 1000;
+const BASE_URL =
+  "https://apis.data.go.kr/1613000/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade";
 
-type Row = {
-  location: string;
-  district: string | null;
-  sigun_gu: string | null;
-  road_address: string | null;
-  jibun_address: string | null;
+type ApartmentRow = {
   apt_name: string | null;
+  sigun_gu: string;
+  dong: string | null;
+  jibun: string | null;
+  road_address: string | null;
   area_sqm: number | null;
-  price_ten_thousand: number | null;
-  building_year: number | null;
   floor: number | null;
-  transaction_type: string;
-  contract_date: string | null;
-  contract_month: string | null;
-  lawd_cd: string;
+  building_year: number | null;
+  contract_year: number;
+  contract_month: number;
+  contract_day: number | null;
+  price_man_won: number;
 };
 
 function toNum(v: unknown): number | null {
@@ -63,89 +61,137 @@ function pad(n: number) {
   return n < 10 ? `0${n}` : `${n}`;
 }
 
-function recentMonths(count: number): string[] {
-  // 공공 API는 보통 익월에 데이터가 갱신됨 → 2달 전부터 역순으로
-  const out: string[] = [];
-  const now = new Date();
-  for (let i = 2; i < 2 + count; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    out.push(`${d.getFullYear()}${pad(d.getMonth() + 1)}`);
+async function fetchPage(
+  serviceKey: string,
+  lawdCd: string,
+  dealYmd: string,
+  pageNo: number,
+  numOfRows = 100,
+): Promise<any[]> {
+  const url =
+    `${BASE_URL}?serviceKey=${encodeURIComponent(serviceKey)}` +
+    `&LAWD_CD=${lawdCd}&DEAL_YMD=${dealYmd}` +
+    `&numOfRows=${numOfRows}&pageNo=${pageNo}`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const xml = await res.text();
+  const parser = new XMLParser({ ignoreAttributes: true });
+  const parsed: any = parser.parse(xml);
+  const items = parsed?.response?.body?.items?.item;
+  if (!items) return [];
+  return Array.isArray(items) ? items : [items];
+}
+
+async function fetchAllPages(
+  serviceKey: string,
+  lawdCd: string,
+  dealYmd: string,
+  districtName: string,
+): Promise<ApartmentRow[]> {
+  const rows: ApartmentRow[] = [];
+  let pageNo = 1;
+  const numOfRows = 100;
+
+  while (true) {
+    const items = await fetchPage(serviceKey, lawdCd, dealYmd, pageNo, numOfRows);
+    if (!items.length) break;
+
+    for (const it of items) {
+      const year = toNum(it["년"]);
+      const mon = toNum(it["월"]);
+      const day = toNum(it["일"]);
+      const price = toNum(it["거래금액"]);
+
+      if (!year || !mon || price === null) continue;
+
+      rows.push({
+        apt_name: it["아파트"] ? String(it["아파트"]).trim() : null,
+        sigun_gu: districtName,
+        dong: it["법정동"] ? String(it["법정동"]).trim() : null,
+        jibun: it["지번"] ? String(it["지번"]).trim() : null,
+        road_address: it["도로명"] ? String(it["도로명"]).trim() : null,
+        area_sqm: toNum(it["전용면적"]),
+        floor: toNum(it["층"]),
+        building_year: toNum(it["건축년도"]),
+        contract_year: year,
+        contract_month: mon,
+        contract_day: day,
+        price_man_won: price,
+      });
+    }
+
+    if (items.length < numOfRows) break;
+    pageNo++;
+    // Safety limit: 30 pages per district/month
+    if (pageNo > 30) break;
   }
-  return out;
+
+  return rows;
 }
 
 export const ingestRealEstate = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z
       .object({
-        monthCount: z.number().int().min(1).max(12).default(3),
-        maxRows: z.number().int().min(100).max(20000).default(MAX_ROWS),
+        apiKey: z.string().optional(),
+        yearMonth: z.string().regex(/^\d{6}$/).optional(),
+        yearMonthStart: z.string().regex(/^\d{6}$/).optional(),
+        yearMonthEnd: z.string().regex(/^\d{6}$/).optional(),
+        districts: z.array(z.string()).optional(),
       })
       .parse(input ?? {}),
   )
   .handler(async ({ data }) => {
     const start = Date.now();
-    const serviceKey = process.env.DATA_GO_KR_SERVICE_KEY;
+    const serviceKey = data.apiKey ?? process.env.DATA_GO_KR_SERVICE_KEY;
     if (!serviceKey) {
-      return { error: "DATA_GO_KR_SERVICE_KEY missing", inserted: 0, durationMs: 0 };
+      return {
+        error: "API 키가 없습니다. apiKey 파라미터 또는 DATA_GO_KR_SERVICE_KEY 환경변수를 설정하세요.",
+        inserted: 0,
+        durationMs: 0,
+      };
     }
 
-    const months = recentMonths(data.monthCount);
-    const parser = new XMLParser({ ignoreAttributes: true });
-    const rows: Row[] = [];
-    let apiCalls = 0;
+    // Build month list
+    let months: string[] = [];
+    if (data.yearMonth) {
+      months = [data.yearMonth];
+    } else if (data.yearMonthStart && data.yearMonthEnd) {
+      const sy = parseInt(data.yearMonthStart.slice(0, 4));
+      const sm = parseInt(data.yearMonthStart.slice(4, 6));
+      const ey = parseInt(data.yearMonthEnd.slice(0, 4));
+      const em = parseInt(data.yearMonthEnd.slice(4, 6));
+      for (let y = sy; y <= ey; y++) {
+        const startM = y === sy ? sm : 1;
+        const endM = y === ey ? em : 12;
+        for (let m = startM; m <= endM; m++) {
+          months.push(`${y}${pad(m)}`);
+        }
+      }
+    } else {
+      // Default: last 3 months (2 months back)
+      const now = new Date();
+      for (let i = 2; i < 5; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        months.push(`${d.getFullYear()}${pad(d.getMonth() + 1)}`);
+      }
+    }
+
+    // Filter districts if specified
+    const selectedDistricts = data.districts?.length
+      ? SEOUL_DISTRICTS.filter((d) => data.districts!.includes(d.name))
+      : SEOUL_DISTRICTS;
+
+    const allRows: ApartmentRow[] = [];
     let apiErrors = 0;
+    let apiCalls = 0;
 
-    outer: for (const month of months) {
-      for (const d of SEOUL_DISTRICTS) {
-        if (rows.length >= data.maxRows) break outer;
-        const url =
-          `https://apis.data.go.kr/1613000/RTMSDataSvcAptTradeAPI/getRTMSDataSvcAptTrade` +
-          `?serviceKey=${encodeURIComponent(serviceKey)}` +
-          `&LAWD_CD=${d.code}&DEAL_YMD=${month}&numOfRows=${PER_CALL}&pageNo=1`;
-
+    for (const month of months) {
+      for (const d of selectedDistricts) {
         try {
           apiCalls++;
-          const res = await fetch(url);
-          if (!res.ok) {
-            apiErrors++;
-            continue;
-          }
-          const xml = await res.text();
-          const parsed: any = parser.parse(xml);
-          const items = parsed?.response?.body?.items?.item;
-          if (!items) continue;
-          const arr: any[] = Array.isArray(items) ? items : [items];
-
-          for (const it of arr) {
-            const year = toNum(it["년"]);
-            const mon = toNum(it["월"]);
-            const day = toNum(it["일"]);
-            const contractDate =
-              year && mon && day ? `${year}-${pad(mon)}-${pad(day)}` : null;
-            const aptName = it["아파트"] ? String(it["아파트"]).trim() : null;
-            const dong = it["법정동"] ? String(it["법정동"]).trim() : null;
-            const jibun = it["지번"] ? String(it["지번"]).trim() : null;
-            const road = it["도로명"] ? String(it["도로명"]).trim() : null;
-
-            rows.push({
-              location: aptName ?? `${d.name} ${dong ?? ""}`.trim(),
-              apt_name: aptName,
-              district: dong,
-              sigun_gu: d.name,
-              road_address: road,
-              jibun_address: dong && jibun ? `${dong} ${jibun}` : dong,
-              area_sqm: toNum(it["전용면적"]),
-              price_ten_thousand: toNum(it["거래금액"]),
-              building_year: toNum(it["건축년도"]),
-              floor: toNum(it["층"]),
-              transaction_type: "매매",
-              contract_date: contractDate,
-              contract_month: year && mon ? `${year}-${pad(mon)}` : null,
-              lawd_cd: d.code,
-            });
-            if (rows.length >= data.maxRows) break outer;
-          }
+          const rows = await fetchAllPages(serviceKey, d.code, month, d.name);
+          allRows.push(...rows);
         } catch (e) {
           apiErrors++;
           console.error(`ingest ${d.code}/${month} failed`, e);
@@ -153,36 +199,39 @@ export const ingestRealEstate = createServerFn({ method: "POST" })
       }
     }
 
-    // Clear existing properties (idempotent re-ingest)
-    await supabaseAdmin.from("favorites").delete().neq("session_id", "__never__");
-    await supabaseAdmin.from("properties").delete().neq("location", "__never__");
-
-    // Batch insert
+    // Upsert into apartments table (insert or update based on unique combo)
     let inserted = 0;
+    let upsertErrors = 0;
     const CHUNK = 500;
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      const chunk = rows.slice(i, i + CHUNK);
-      const { error } = await supabaseAdmin.from("properties").insert(chunk);
+
+    for (let i = 0; i < allRows.length; i += CHUNK) {
+      const chunk = allRows.slice(i, i + CHUNK);
+      const { error } = await supabaseAdmin.from("apartments").upsert(chunk, {
+        onConflict: "apt_name,sigun_gu,dong,area_sqm,floor,contract_year,contract_month,contract_day,price_man_won",
+        ignoreDuplicates: true,
+      });
       if (error) {
-        console.error("insert chunk failed", error);
-        return {
-          error: error.message,
-          inserted,
-          attempted: rows.length,
-          apiCalls,
-          apiErrors,
-          durationMs: Date.now() - start,
-        };
+        upsertErrors++;
+        console.error("upsert chunk failed", error);
+        // Try plain insert as fallback
+        const { error: insertError } = await supabaseAdmin.from("apartments").insert(chunk);
+        if (insertError) {
+          console.error("insert chunk also failed", insertError);
+        } else {
+          inserted += chunk.length;
+        }
+      } else {
+        inserted += chunk.length;
       }
-      inserted += chunk.length;
     }
 
     return {
       error: null,
       inserted,
-      attempted: rows.length,
+      attempted: allRows.length,
       apiCalls,
       apiErrors,
+      upsertErrors,
       months,
       durationMs: Date.now() - start,
     };

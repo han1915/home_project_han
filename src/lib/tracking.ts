@@ -1,40 +1,26 @@
-import { supabase } from "@/integrations/supabase/client";
+export type EventType =
+  | "home_view" | "search_start" | "search_filter_apply"
+  | "property_view" | "favorite_add" | "contact_click"
+  | "analytics_view" | "market_view";
 
-const KEY = "hd_session_id";
+const SESSION_KEY = "hd_session";
 
 export function getSessionId(): string {
-  if (typeof window === "undefined") return "ssr";
-  let id = localStorage.getItem(KEY);
-  if (!id) {
-    id = `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-    localStorage.setItem(KEY, id);
+  let sid = sessionStorage.getItem(SESSION_KEY);
+  if (!sid) {
+    sid = crypto.randomUUID();
+    sessionStorage.setItem(SESSION_KEY, sid);
   }
-  return id;
+  return sid;
 }
 
-export type EventType =
-  | "home_view"
-  | "search_start"
-  | "search_filter_apply"
-  | "property_view"
-  | "favorite_add"
-  | "contact_click"
-  | "analytics_view"
-  | "market_view";
-
-export async function trackEvent(
-  event_type: EventType,
-  event_data: Record<string, unknown> = {},
-) {
-  if (typeof window === "undefined") return;
+export async function trackEvent(type: EventType, data?: Record<string, unknown>) {
   try {
+    const { supabase } = await import("@/integrations/supabase/client");
     await supabase.from("user_events").insert({
       session_id: getSessionId(),
-      event_type,
-      event_data: event_data as never,
-      page_url: window.location.pathname,
+      event_type: type,
+      event_data: data ?? {},
     });
-  } catch (e) {
-    console.warn("trackEvent failed", e);
-  }
+  } catch {}
 }
