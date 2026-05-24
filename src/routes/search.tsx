@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Ruler, Calendar, Heart, X, TrendingUp, TrendingDown, Building2 } from "lucide-react";
+import { Ruler, Calendar, Heart, X, TrendingUp, TrendingDown, Building2, ChevronDown } from "lucide-react";
 import { SiteHeader } from "@/components/SiteHeader";
 import { Slider } from "@/components/ui/slider";
 import { supabase } from "@/integrations/supabase/client";
@@ -20,6 +20,7 @@ const DISTRICTS = [
 
 const YEARS = ["전체", "2025", "2024", "2023", "2022"] as const;
 const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
+const PAGE_SIZE = 50;
 
 type Apt = {
   id: string;
@@ -51,41 +52,37 @@ function fmtDate(year: number, month: number, day?: number | null) {
 
 function loadFavorites(): Set<string> {
   try {
-    const stored = localStorage.getItem("hd_favorites");
-    return stored ? new Set(JSON.parse(stored)) : new Set();
+    const s = localStorage.getItem("hd_favorites");
+    return s ? new Set(JSON.parse(s)) : new Set();
   } catch { return new Set(); }
 }
-function saveFavorites(fav: Set<string>) {
-  localStorage.setItem("hd_favorites", JSON.stringify([...fav]));
+function saveFavorites(f: Set<string>) {
+  localStorage.setItem("hd_favorites", JSON.stringify([...f]));
 }
 
 // ─── Detail Modal ─────────────────────────────────────────────────────────────
 
-function AptDetailModal({
-  apt, allData, favorites, onToggleFav, onClose,
-}: {
+function AptDetailModal({ apt, allData, favorites, onToggleFav, onClose }: {
   apt: Apt; allData: Apt[]; favorites: Set<string>;
   onToggleFav: (id: string) => void; onClose: () => void;
 }) {
   const isFav = favorites.has(apt.id);
-
   const pricePerSqm = apt.area_sqm && apt.area_sqm > 0
     ? Math.round(apt.price_man_won / apt.area_sqm) : null;
 
-  const history = useMemo(() => {
-    return allData
+  const history = useMemo(() =>
+    allData
       .filter(p =>
-        p.apt_name === apt.apt_name &&
-        p.sigun_gu === apt.sigun_gu &&
+        p.apt_name === apt.apt_name && p.sigun_gu === apt.sigun_gu &&
         (p.dong === apt.dong || (!p.dong && !apt.dong))
       )
       .sort((a, b) => (b.contract_year * 100 + b.contract_month) - (a.contract_year * 100 + a.contract_month))
-      .slice(0, 12);
-  }, [apt, allData]);
+      .slice(0, 12),
+  [apt, allData]);
 
   const priceTrend = useMemo(() => {
     const idx = history.findIndex(h => h.id === apt.id);
-    if (idx === -1 || idx >= history.length - 1) return null;
+    if (idx < 0 || idx >= history.length - 1) return null;
     const prev = history[idx + 1];
     const change = apt.price_man_won - prev.price_man_won;
     const pct = Math.round((change / prev.price_man_won) * 1000) / 10;
@@ -105,7 +102,6 @@ function AptDetailModal({
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="relative w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-2xl bg-white shadow-2xl">
-        {/* Header */}
         <div className="sticky top-0 z-10 flex items-start justify-between gap-3 rounded-t-3xl sm:rounded-t-2xl bg-white px-5 pt-5 pb-4 border-b border-[#E5E8EB]">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
@@ -118,28 +114,22 @@ function AptDetailModal({
               <div className={`mt-1 flex items-center gap-1 text-sm font-semibold ${priceTrend.pct > 0 ? "text-[#F04452]" : "text-emerald-600"}`}>
                 {priceTrend.pct > 0 ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
                 직전 거래 대비 {priceTrend.pct > 0 ? "+" : ""}{priceTrend.pct}%
-                <span className="text-[#8B95A1] font-normal ml-1">
-                  ({priceTrend.change > 0 ? "+" : ""}{fmtPrice(Math.abs(priceTrend.change))})
-                </span>
+                <span className="text-[#8B95A1] font-normal ml-1">({priceTrend.change > 0 ? "+" : ""}{fmtPrice(Math.abs(priceTrend.change))})</span>
               </div>
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0 mt-1">
-            <button
-              onClick={() => onToggleFav(apt.id)}
-              className={`rounded-full p-2 transition ${isFav ? "text-[#F04452] bg-[#F04452]/10" : "text-[#D1D6DB] hover:text-[#F04452] hover:bg-[#F04452]/10"}`}
-              aria-label={isFav ? "찜 취소" : "찜하기"}
-            >
+            <button onClick={() => onToggleFav(apt.id)}
+              className={`rounded-full p-2 transition ${isFav ? "text-[#F04452] bg-[#F04452]/10" : "text-[#D1D6DB] hover:text-[#F04452] hover:bg-[#F04452]/10"}`}>
               <Heart className={`h-5 w-5 ${isFav ? "fill-current" : ""}`} />
             </button>
-            <button onClick={onClose} className="rounded-full p-2 text-[#8B95A1] hover:bg-[#F2F4F6] transition" aria-label="닫기">
+            <button onClick={onClose} className="rounded-full p-2 text-[#8B95A1] hover:bg-[#F2F4F6] transition">
               <X className="h-5 w-5" />
             </button>
           </div>
         </div>
 
         <div className="px-5 py-5 space-y-6">
-          {/* Detail Grid */}
           <div className="grid grid-cols-2 gap-3">
             {[
               { label: "거래일", value: fmtDate(apt.contract_year, apt.contract_month, apt.contract_day) },
@@ -156,7 +146,6 @@ function AptDetailModal({
             ))}
           </div>
 
-          {/* Transaction History */}
           {history.length > 1 && (
             <div>
               <h3 className="flex items-center gap-2 text-sm font-semibold text-[#191F28] mb-3">
@@ -164,24 +153,19 @@ function AptDetailModal({
                 {apt.apt_name} 거래 이력 ({history.length}건)
               </h3>
               <div className="space-y-2">
-                {history.map(h => {
-                  const isThis = h.id === apt.id;
-                  return (
-                    <div
-                      key={h.id}
-                      className={`flex items-center justify-between rounded-xl px-4 py-3 text-sm ${isThis ? "bg-[#EFF6FF] border border-[#3182F6]/30" : "bg-[#F2F4F6]"}`}
-                    >
-                      <div className="text-[#8B95A1]">
-                        {fmtDate(h.contract_year, h.contract_month, h.contract_day)}
-                        {h.floor && <span className="ml-2">{h.floor}층</span>}
-                        {h.area_sqm && <span className="ml-2">{h.area_sqm}㎡</span>}
-                      </div>
-                      <div className={`font-bold number-tabular ${isThis ? "text-[#3182F6]" : "text-[#191F28]"}`}>
-                        {fmtPrice(h.price_man_won)}
-                      </div>
+                {history.map(h => (
+                  <div key={h.id}
+                    className={`flex items-center justify-between rounded-xl px-4 py-3 text-sm ${h.id === apt.id ? "bg-[#EFF6FF] border border-[#3182F6]/30" : "bg-[#F2F4F6]"}`}>
+                    <div className="text-[#8B95A1]">
+                      {fmtDate(h.contract_year, h.contract_month, h.contract_day)}
+                      {h.floor && <span className="ml-2">{h.floor}층</span>}
+                      {h.area_sqm && <span className="ml-2">{h.area_sqm}㎡</span>}
                     </div>
-                  );
-                })}
+                    <div className={`font-bold number-tabular ${h.id === apt.id ? "text-[#3182F6]" : "text-[#191F28]"}`}>
+                      {fmtPrice(h.price_man_won)}
+                    </div>
+                  </div>
+                ))}
               </div>
               {history.length >= 12 && <p className="mt-2 text-xs text-[#8B95A1] text-center">최근 12건 표시</p>}
             </div>
@@ -202,18 +186,14 @@ function SearchPage() {
   const [favorites, setFavorites] = useState<Set<string>>(loadFavorites);
   const [showFavOnly, setShowFavOnly] = useState(false);
   const [selectedApt, setSelectedApt] = useState<Apt | null>(null);
+  const [page, setPage] = useState(1);
 
+  // Reset page on filter change
+  useEffect(() => { setPage(1); }, [gu, year, month, priceRange, showFavOnly]);
   // Reset month when year cleared
   useEffect(() => { if (year === "전체") setMonth("전체"); }, [year]);
 
   useEffect(() => { trackEvent("search_start"); }, []);
-  useEffect(() => {
-    const t = setTimeout(
-      () => trackEvent("search_filter_apply", { sigun_gu: gu, year, month }),
-      400,
-    );
-    return () => clearTimeout(t);
-  }, [gu, year, month, priceRange]);
 
   const toggleFavorite = (id: string) => {
     setFavorites(prev => {
@@ -224,13 +204,15 @@ function SearchPage() {
     });
   };
 
-  // Server-side filtering: district + year + month
   const { data, isLoading } = useQuery({
     queryKey: ["apartments", gu, year, month],
     queryFn: async () => {
       let q = supabase
         .from("apartments")
         .select("id,apt_name,sigun_gu,dong,jibun,area_sqm,floor,building_year,contract_year,contract_month,contract_day,price_man_won")
+        // Always restrict to 2022-2025
+        .gte("contract_year", 2022)
+        .lte("contract_year", 2025)
         .order("contract_year", { ascending: false })
         .order("contract_month", { ascending: false })
         .order("contract_day", { ascending: false });
@@ -239,10 +221,10 @@ function SearchPage() {
       if (year !== "전체") q = (q as any).eq("contract_year", Number(year));
       if (month !== "전체") q = (q as any).eq("contract_month", Number(month));
 
-      // Smaller limit when filters narrow the data
-      const isNarrow = (gu !== "전체" && year !== "전체") || month !== "전체";
-      const isMedium = gu !== "전체" || year !== "전체";
-      const limit = isNarrow ? 2000 : isMedium ? 5000 : 3000;
+      // Tight limits — just enough to browse; pagination handles the rest
+      const hasNarrowFilter = (gu !== "전체" && year !== "전체") || month !== "전체";
+      const hasSomeFilter = gu !== "전체" || year !== "전체";
+      const limit = hasNarrowFilter ? 1000 : hasSomeFilter ? 2000 : 500;
       q = (q as any).limit(limit);
 
       const { data, error } = await q;
@@ -261,10 +243,12 @@ function SearchPage() {
     });
   }, [data, priceRange, favorites, showFavOnly]);
 
-  // Label for current filter state
+  const shown = filtered.slice(0, page * PAGE_SIZE);
+  const hasMore = filtered.length > shown.length;
+
   const filterLabel = [
     gu !== "전체" ? gu : "서울 전체",
-    year !== "전체" ? `${year}년` : null,
+    year !== "전체" ? `${year}년` : "2022~2025",
     month !== "전체" ? `${month}월` : null,
   ].filter(Boolean).join(" · ");
 
@@ -272,16 +256,18 @@ function SearchPage() {
     <div className="min-h-screen bg-[#F2F4F6]">
       <SiteHeader />
 
-      {/* Page Header */}
       <div className="bg-white border-b border-[#E5E8EB] px-5 py-8">
         <div className="mx-auto max-w-7xl flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-[#191F28]">실거래 조회</h1>
             <p className="mt-1 text-sm text-[#8B95A1]">
               <span className="text-[#191F28] font-medium">{filterLabel}</span>
-              {" · "}조건에 맞는 실거래{" "}
+              {" · "}
               <span className="font-semibold text-[#3182F6]">{filtered.length.toLocaleString()}건</span>
-              {data && <span className="ml-1 text-[#8B95A1]">/ 조회 {data.length.toLocaleString()}건</span>}
+              {data && filtered.length !== data.length &&
+                <span className="ml-1">/ 조회 {data.length.toLocaleString()}건</span>
+              }
+              {" · "}<span>표시 {shown.length}건</span>
             </p>
           </div>
           <button
@@ -299,7 +285,6 @@ function SearchPage() {
       </div>
 
       <div className="mx-auto max-w-7xl px-5 py-8 grid gap-8 lg:grid-cols-[260px_1fr]">
-        {/* Filters Sidebar */}
         <aside className="space-y-5 lg:sticky lg:top-20 lg:self-start">
 
           {/* District */}
@@ -307,15 +292,10 @@ function SearchPage() {
             <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">자치구</h3>
             <div className="flex flex-wrap gap-1.5">
               {DISTRICTS.map(d => (
-                <button
-                  key={d}
-                  onClick={() => setGu(d)}
+                <button key={d} onClick={() => setGu(d)}
                   className={`rounded-lg border px-2.5 py-1 text-xs transition ${
-                    gu === d
-                      ? "border-[#3182F6] bg-[#3182F6] text-white"
-                      : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
-                  }`}
-                >
+                    gu === d ? "border-[#3182F6] bg-[#3182F6] text-white" : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
+                  }`}>
                   {d}
                 </button>
               ))}
@@ -327,46 +307,30 @@ function SearchPage() {
             <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">거래 연도</h3>
             <div className="flex flex-wrap gap-1.5">
               {YEARS.map(y => (
-                <button
-                  key={y}
-                  onClick={() => setYear(y)}
+                <button key={y} onClick={() => setYear(y)}
                   className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-                    year === y
-                      ? "border-[#3182F6] bg-[#3182F6] text-white"
-                      : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
-                  }`}
-                >
+                    year === y ? "border-[#3182F6] bg-[#3182F6] text-white" : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
+                  }`}>
                   {y === "전체" ? "전체" : `${y}년`}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Month — only when year is selected */}
+          {/* Month — only when year selected */}
           {year !== "전체" && (
             <div className="card p-5">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">거래 월</h3>
               <div className="flex flex-wrap gap-1.5">
-                <button
-                  onClick={() => setMonth("전체")}
+                <button onClick={() => setMonth("전체")}
                   className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
-                    month === "전체"
-                      ? "border-[#3182F6] bg-[#3182F6] text-white"
-                      : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
-                  }`}
-                >
-                  전체
-                </button>
+                    month === "전체" ? "border-[#3182F6] bg-[#3182F6] text-white" : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
+                  }`}>전체</button>
                 {MONTHS.map(m => (
-                  <button
-                    key={m}
-                    onClick={() => setMonth(String(m))}
+                  <button key={m} onClick={() => setMonth(String(m))}
                     className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
-                      month === String(m)
-                        ? "border-[#3182F6] bg-[#3182F6] text-white"
-                        : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
-                    }`}
-                  >
+                      month === String(m) ? "border-[#3182F6] bg-[#3182F6] text-white" : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
+                    }`}>
                     {m}월
                   </button>
                 ))}
@@ -378,8 +342,7 @@ function SearchPage() {
           <div className="card p-5">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">가격대 (만원)</h3>
             <Slider
-              value={priceRange}
-              min={0} max={300000} step={5000}
+              value={priceRange} min={0} max={300000} step={5000}
               onValueChange={v => setPriceRange([v[0], v[1]] as [number, number])}
               className="my-4"
             />
@@ -389,8 +352,7 @@ function SearchPage() {
             </div>
           </div>
 
-          {/* Active filter summary */}
-          {(gu !== "전체" || year !== "전체" || month !== "전체") && (
+          {(gu !== "전체" || year !== "전체" || month !== "전체" || priceRange[0] > 0 || priceRange[1] < 300000) && (
             <button
               onClick={() => { setGu("전체"); setYear("전체"); setMonth("전체"); setPriceRange([0, 300000]); }}
               className="w-full rounded-xl border border-[#E5E8EB] bg-white py-2 text-xs text-[#8B95A1] hover:border-[#F04452] hover:text-[#F04452] transition"
@@ -423,60 +385,71 @@ function SearchPage() {
               )}
             </div>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {filtered.map(p => (
-                <div
-                  key={p.id}
-                  onClick={() => { setSelectedApt(p); trackEvent("property_view"); }}
-                  className="card p-5 cursor-pointer hover:shadow-lg transition-all hover:-translate-y-0.5 group"
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1 flex-wrap">
-                        <span className="text-xs font-semibold text-[#3182F6] bg-[#EFF6FF] px-2 py-0.5 rounded-md">{p.sigun_gu}</span>
-                        {p.dong && <span className="text-xs text-[#8B95A1]">{p.dong}</span>}
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {shown.map(p => (
+                  <div key={p.id}
+                    onClick={() => { setSelectedApt(p); trackEvent("property_view"); }}
+                    className="card p-5 cursor-pointer hover:shadow-lg transition-all hover:-translate-y-0.5 group"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <span className="text-xs font-semibold text-[#3182F6] bg-[#EFF6FF] px-2 py-0.5 rounded-md">{p.sigun_gu}</span>
+                          {p.dong && <span className="text-xs text-[#8B95A1]">{p.dong}</span>}
+                        </div>
+                        <h3 className="mt-2 font-bold text-[#191F28] text-base leading-tight truncate">{p.apt_name}</h3>
                       </div>
-                      <h3 className="mt-2 font-bold text-[#191F28] text-base leading-tight truncate">{p.apt_name}</h3>
+                      <button
+                        onClick={e => { e.stopPropagation(); toggleFavorite(p.id); }}
+                        className={`ml-2 shrink-0 rounded-full p-1.5 transition ${
+                          favorites.has(p.id) ? "text-[#F04452] bg-[#F04452]/10" : "text-[#D1D6DB] hover:text-[#F04452] hover:bg-[#F04452]/10"
+                        }`}
+                        aria-label={favorites.has(p.id) ? "찜 취소" : "찜하기"}
+                      >
+                        <Heart className={`h-4 w-4 ${favorites.has(p.id) ? "fill-current" : ""}`} />
+                      </button>
                     </div>
-                    <button
-                      onClick={e => { e.stopPropagation(); toggleFavorite(p.id); }}
-                      className={`ml-2 shrink-0 rounded-full p-1.5 transition ${
-                        favorites.has(p.id)
-                          ? "text-[#F04452] bg-[#F04452]/10"
-                          : "text-[#D1D6DB] hover:text-[#F04452] hover:bg-[#F04452]/10"
-                      }`}
-                      aria-label={favorites.has(p.id) ? "찜 취소" : "찜하기"}
-                    >
-                      <Heart className={`h-4 w-4 ${favorites.has(p.id) ? "fill-current" : ""}`} />
-                    </button>
-                  </div>
 
-                  <div className="mt-3 font-bold text-xl text-[#3182F6]">{fmtPrice(p.price_man_won)}</div>
+                    <div className="mt-3 font-bold text-xl text-[#3182F6]">{fmtPrice(p.price_man_won)}</div>
 
-                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#8B95A1]">
-                    {p.area_sqm != null && (
-                      <span className="flex items-center gap-1"><Ruler className="h-3 w-3" />{p.area_sqm}㎡</span>
-                    )}
-                    {p.floor != null && <span>{p.floor}층</span>}
-                    {p.building_year != null && (
-                      <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />{p.building_year}년</span>
-                    )}
-                    <span className="ml-auto font-medium text-[#191F28]">
-                      {fmtDate(p.contract_year, p.contract_month, p.contract_day)}
-                    </span>
-                  </div>
+                    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#8B95A1]">
+                      {p.area_sqm != null && (
+                        <span className="flex items-center gap-1"><Ruler className="h-3 w-3" />{p.area_sqm}㎡</span>
+                      )}
+                      {p.floor != null && <span>{p.floor}층</span>}
+                      {p.building_year != null && (
+                        <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />{p.building_year}년</span>
+                      )}
+                      <span className="ml-auto font-medium text-[#191F28]">
+                        {fmtDate(p.contract_year, p.contract_month, p.contract_day)}
+                      </span>
+                    </div>
 
-                  <div className="mt-2 text-xs text-[#C4C9D4] opacity-0 group-hover:opacity-100 transition-opacity">
-                    클릭하여 거래 이력 보기 →
+                    <div className="mt-2 text-xs text-[#C4C9D4] opacity-0 group-hover:opacity-100 transition-opacity">
+                      클릭하여 거래 이력 보기 →
+                    </div>
                   </div>
+                ))}
+              </div>
+
+              {/* Load more */}
+              {hasMore && (
+                <div className="mt-6 text-center">
+                  <button
+                    onClick={() => setPage(p => p + 1)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-[#E5E8EB] bg-white px-6 py-3 text-sm font-semibold text-[#191F28] hover:border-[#3182F6] hover:text-[#3182F6] transition"
+                  >
+                    <ChevronDown className="h-4 w-4" />
+                    더 보기 ({filtered.length - shown.length}건 더)
+                  </button>
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </div>
       </div>
 
-      {/* Detail Modal */}
       {selectedApt && (
         <AptDetailModal
           apt={selectedApt}
