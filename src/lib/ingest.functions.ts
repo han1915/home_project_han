@@ -97,22 +97,23 @@ async function fetchAllPages(
     if (!items.length) break;
 
     for (const it of items) {
-      const year = toNum(it["년"]);
-      const mon = toNum(it["월"]);
-      const day = toNum(it["일"]);
-      const price = toNum(it["거래금액"]);
+      // New API uses English camelCase fields
+      const year = toNum(it.dealYear);
+      const mon = toNum(it.dealMonth);
+      const day = toNum(it.dealDay);
+      const price = toNum(it.dealAmount);
 
       if (!year || !mon || price === null) continue;
 
       rows.push({
-        apt_name: it["아파트"] ? String(it["아파트"]).trim() : null,
+        apt_name: it.aptNm ? String(it.aptNm).trim() : null,
         sigun_gu: districtName,
-        dong: it["법정동"] ? String(it["법정동"]).trim() : null,
-        jibun: it["지번"] ? String(it["지번"]).trim() : null,
-        road_address: it["도로명"] ? String(it["도로명"]).trim() : null,
-        area_sqm: toNum(it["전용면적"]),
-        floor: toNum(it["층"]),
-        building_year: toNum(it["건축년도"]),
+        dong: it.umdNm ? String(it.umdNm).trim() : null,
+        jibun: it.jibun ? String(it.jibun).trim() : null,
+        road_address: it.aptDong ? String(it.aptDong).trim() : null,
+        area_sqm: toNum(it.excluUseAr),
+        floor: toNum(it.floor),
+        building_year: toNum(it.buildYear),
         contract_year: year,
         contract_month: mon,
         contract_day: day,
