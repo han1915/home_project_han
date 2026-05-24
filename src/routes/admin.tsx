@@ -1,10 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { Database, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
-import { XMLParser } from "fast-xml-parser";
 import { SiteHeader } from "@/components/SiteHeader";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({
@@ -12,9 +10,6 @@ export const Route = createFileRoute("/admin")({
   }),
   component: AdminPage,
 });
-
-const BASE_URL =
-  "https://apis.data.go.kr/1613000/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade";
 
 const SEOUL_DISTRICTS = [
   { code: "11110", name: "종로구" },
@@ -53,12 +48,6 @@ function pad(n: number) {
   return n < 10 ? `0${n}` : `${n}`;
 }
 
-function toNum(v: unknown): number | null {
-  if (v === undefined || v === null || v === "") return null;
-  const n = Number(String(v).replace(/,/g, "").trim());
-  return Number.isFinite(n) ? n : null;
-}
-
 type IngestResult = {
   error: string | null;
   inserted: number;
@@ -94,21 +83,17 @@ function AdminPage() {
       alert("공공데이터 포털 API 키를 입력해 주세요.");
       return;
     }
-
     setRunning(true);
     setResult(null);
     setProgress("");
 
     const start = Date.now();
-    const parser = new XMLParser({ ignoreAttributes: true });
 
     // Build month list
-    const sy = startYear, sm = startMonth;
-    const ey = endYear, em = endMonth;
     const months: string[] = [];
-    for (let y = sy; y <= ey; y++) {
-      const s = y === sy ? sm : 1;
-      const e = y === ey ? em : 12;
+    for (let y = startYear; y <= endYear; y++) {
+      const s = y === startYear ? startMonth : 1;
+      const e = y === endYear ? endMonth : 12;
       for (let m = s; m <= e; m++) months.push(`${y}${pad(m)}`);
     }
 
@@ -118,10 +103,11 @@ function AdminPage() {
 
     const totalSteps = months.length * targets.length;
     let step = 0;
+    let inserted = 0;
+    let attempted = 0;
     let apiCalls = 0;
     let apiErrors = 0;
-    let attempted = 0;
-    let inserted = 0;
+    let firstError: string | null = null;
 
     try {
       for (const month of months) {
@@ -131,92 +117,35 @@ function AdminPage() {
             `[${step}/${totalSteps}] ${district.name} ${month.slice(0, 4)}-${month.slice(4)} 조회 중...`,
           );
 
-          const rows: object[] = [];
-          let pageNo = 1;
-
-          while (true) {
-            const url =
-              `${BASE_URL}?serviceKey=${encodeURIComponent(apiKey.trim())}` +
-              `&LAWD_CD=${district.code}&DEAL_YMD=${month}` +
-              `&numOfRows=100&pageNo=${pageNo}`;
-
-            try {
-              apiCalls++;
-              const res = await fetch(url);
-              if (!res.ok) break;
-              const xml = await res.text();
-              const parsed: any = parser.parse(xml);
-
-              // Check for API error response
-              const resultCode = parsed?.response?.header?.resultCode ?? parsed?.OpenAPI_ServiceResponse?.cmmMsgHeader?.returnReasonCode;
-              if (resultCode && String(resultCode) !== "000" && String(resultCode) !== "00") break;
-
-              const items = parsed?.response?.body?.items?.item;
-              if (!items) break;
-              const arr = Array.isArray(items) ? items : [items];
-
-              for (const it of arr) {
-                const year = toNum(it.dealYear);
-                const mon = toNum(it.dealMonth);
-                const price = toNum(it.dealAmount);
-                if (!year || !mon || price === null) continue;
-
-                rows.push({
-                  apt_name: it.aptNm ? String(it.aptNm).trim() : null,
-                  sigun_gu: district.name,
-                  dong: it.umdNm ? String(it.umdNm).trim() : null,
-                  jibun: it.jibun ? String(it.jibun).trim() : null,
-                  road_address: it.aptDong ? String(it.aptDong).trim() : null,
-                  area_sqm: toNum(it.excluUseAr),
-                  floor: toNum(it.floor),
-                  building_year: toNum(it.buildYear),
-                  contract_year: year,
-                  contract_month: mon,
-                  contract_day: toNum(it.dealDay),
-                  price_man_won: price,
-                });
-              }
-
-              if (arr.length < 100) break;
-              pageNo++;
-              if (pageNo > 30) break;
-            } catch {
-              apiErrors++;
-              break;
-            }
-          }
-
-          attempted += rows.length;
-
-          // Upsert in chunks of 500 — onConflict matches the apartments_unique_tx constraint
-          for (let i = 0; i < rows.length; i += 500) {
-            const chunk = rows.slice(i, i + 500);
-            const { error: upsertErr } = await supabase.from("apartments").upsert(chunk as any, {
-              onConflict:
-                "sigun_gu,apt_name,dong,area_sqm,floor,contract_year,contract_month,contract_day,price_man_won",
-              ignoreDuplicates: true,
+          try {
+            const res = await fetch("/api/ingest-month", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                apiKey: apiKey.trim(),
+                lawdCd: district.code,
+                districtName: district.name,
+                dealYmd: month,
+              }),
             });
-            if (upsertErr) {
-              console.error("Upsert chunk failed:", upsertErr.message, upsertErr.details);
-              throw new Error(`DB 오류: ${upsertErr.message}`);
+            const data = await res.json();
+            if (!res.ok) {
+              apiErrors++;
+              if (!firstError) firstError = data.error ?? `HTTP ${res.status}`;
+            } else {
+              inserted += data.inserted ?? 0;
+              attempted += data.attempted ?? 0;
+              apiCalls += data.apiCalls ?? 0;
             }
-            inserted += chunk.length;
+          } catch (e) {
+            apiErrors++;
+            if (!firstError) firstError = e instanceof Error ? e.message : String(e);
           }
         }
       }
 
       setResult({
-        error: null,
-        inserted,
-        attempted,
-        apiCalls,
-        apiErrors,
-        months,
-        durationMs: Date.now() - start,
-      });
-    } catch (e) {
-      setResult({
-        error: e instanceof Error ? e.message : String(e),
+        error: firstError,
         inserted,
         attempted,
         apiCalls,
@@ -273,18 +202,14 @@ function AdminPage() {
                     onChange={(e) => setStartYear(Number(e.target.value))}
                     className="flex-1 rounded-xl border border-[#E5E8EB] bg-white px-3 py-2 text-sm text-[#191F28] focus:outline-none focus:ring-2 focus:ring-[#3182F6]/40"
                   >
-                    {YEARS.map((y) => (
-                      <option key={y} value={y}>{y}년</option>
-                    ))}
+                    {YEARS.map((y) => <option key={y} value={y}>{y}년</option>)}
                   </select>
                   <select
                     value={startMonth}
                     onChange={(e) => setStartMonth(Number(e.target.value))}
                     className="w-20 rounded-xl border border-[#E5E8EB] bg-white px-3 py-2 text-sm text-[#191F28] focus:outline-none focus:ring-2 focus:ring-[#3182F6]/40"
                   >
-                    {MONTHS.map((m) => (
-                      <option key={m} value={m}>{m}월</option>
-                    ))}
+                    {MONTHS.map((m) => <option key={m} value={m}>{m}월</option>)}
                   </select>
                 </div>
               </div>
@@ -296,18 +221,14 @@ function AdminPage() {
                     onChange={(e) => setEndYear(Number(e.target.value))}
                     className="flex-1 rounded-xl border border-[#E5E8EB] bg-white px-3 py-2 text-sm text-[#191F28] focus:outline-none focus:ring-2 focus:ring-[#3182F6]/40"
                   >
-                    {YEARS.map((y) => (
-                      <option key={y} value={y}>{y}년</option>
-                    ))}
+                    {YEARS.map((y) => <option key={y} value={y}>{y}년</option>)}
                   </select>
                   <select
                     value={endMonth}
                     onChange={(e) => setEndMonth(Number(e.target.value))}
                     className="w-20 rounded-xl border border-[#E5E8EB] bg-white px-3 py-2 text-sm text-[#191F28] focus:outline-none focus:ring-2 focus:ring-[#3182F6]/40"
                   >
-                    {MONTHS.map((m) => (
-                      <option key={m} value={m}>{m}월</option>
-                    ))}
+                    {MONTHS.map((m) => <option key={m} value={m}>{m}월</option>)}
                   </select>
                 </div>
               </div>
@@ -321,10 +242,7 @@ function AdminPage() {
                 자치구 선택
               </label>
               <button
-                onClick={() => {
-                  setAllDistricts((v) => !v);
-                  setSelectedDistricts([]);
-                }}
+                onClick={() => { setAllDistricts((v) => !v); setSelectedDistricts([]); }}
                 className={`text-xs font-semibold px-3 py-1 rounded-lg border transition ${
                   allDistricts
                     ? "border-[#3182F6] bg-[#3182F6] text-white"
@@ -335,28 +253,28 @@ function AdminPage() {
               </button>
             </div>
             {!allDistricts && (
-              <div className="flex flex-wrap gap-1.5">
-                {DISTRICT_NAMES.map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => toggleDistrict(d)}
-                    className={`rounded-lg border px-2.5 py-1 text-xs transition ${
-                      selectedDistricts.includes(d)
-                        ? "border-[#3182F6] bg-[#3182F6] text-white"
-                        : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
-                    }`}
-                  >
-                    {d}
-                  </button>
-                ))}
-              </div>
-            )}
-            {!allDistricts && (
-              <p className="mt-2 text-xs text-[#8B95A1]">
-                {selectedDistricts.length === 0
-                  ? "자치구를 선택하세요"
-                  : `${selectedDistricts.length}개 구 선택됨: ${selectedDistricts.join(", ")}`}
-              </p>
+              <>
+                <div className="flex flex-wrap gap-1.5">
+                  {DISTRICT_NAMES.map((d) => (
+                    <button
+                      key={d}
+                      onClick={() => toggleDistrict(d)}
+                      className={`rounded-lg border px-2.5 py-1 text-xs transition ${
+                        selectedDistricts.includes(d)
+                          ? "border-[#3182F6] bg-[#3182F6] text-white"
+                          : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
+                      }`}
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-[#8B95A1]">
+                  {selectedDistricts.length === 0
+                    ? "자치구를 선택하세요"
+                    : `${selectedDistricts.length}개 구 선택됨: ${selectedDistricts.join(", ")}`}
+                </p>
+              </>
             )}
           </div>
 
@@ -368,7 +286,7 @@ function AdminPage() {
             className="w-full bg-[#3182F6] hover:bg-[#1b6ef3] text-white rounded-xl"
           >
             {running ? (
-              <><Loader2 className="mr-2 h-4 w-4 animate-spin" />적재 중... 브라우저를 닫지 마세요</>
+              <><Loader2 className="mr-2 h-4 w-4 animate-spin" />적재 중...</>
             ) : (
               <><Database className="mr-2 h-4 w-4" />데이터 적재 실행</>
             )}
@@ -399,7 +317,7 @@ function AdminPage() {
               )}
               <div className="flex-1">
                 <h3 className="font-semibold text-[#191F28]">
-                  {result.error ? "적재 실패" : "적재 완료"}
+                  {result.error ? "오류 발생" : "적재 완료"}
                 </h3>
                 <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
                   <dt className="text-[#8B95A1]">적재 건수</dt>
@@ -408,17 +326,19 @@ function AdminPage() {
                   <dd className="font-medium text-[#191F28]">{result.attempted.toLocaleString()}</dd>
                   <dt className="text-[#8B95A1]">API 호출</dt>
                   <dd className="font-medium text-[#191F28]">{result.apiCalls} (오류 {result.apiErrors})</dd>
-                  <dt className="text-[#8B95A1]">대상 월</dt>
+                  <dt className="text-[#8B95A1]">기간</dt>
                   <dd className="font-medium text-[#191F28]">
-                    {result.months.length > 6
-                      ? `${result.months[0]} ~ ${result.months[result.months.length - 1]} (${result.months.length}개월)`
+                    {result.months.length > 4
+                      ? `${result.months[0]} ~ ${result.months[result.months.length - 1]}`
                       : result.months.join(", ")}
                   </dd>
                   <dt className="text-[#8B95A1]">소요 시간</dt>
                   <dd className="font-medium text-[#191F28]">{(result.durationMs / 1000).toFixed(1)}s</dd>
                 </dl>
                 {result.error && (
-                  <p className="mt-3 text-sm text-[#F04452]">{result.error}</p>
+                  <p className="mt-3 rounded-lg bg-[#F04452]/10 px-3 py-2 text-sm text-[#F04452] font-mono">
+                    {result.error}
+                  </p>
                 )}
               </div>
             </div>
@@ -429,10 +349,9 @@ function AdminPage() {
         <div className="mt-6 rounded-2xl bg-[#EFF6FF] border border-[#3182F6]/20 p-5">
           <h4 className="font-semibold text-[#191F28] text-sm mb-2">안내</h4>
           <ul className="text-xs text-[#8B95A1] space-y-1.5 list-disc list-inside">
-            <li>공공데이터 포털(data.go.kr)에서 <strong>국토교통부 아파트 매매 실거래가</strong> 서비스 키를 발급받으세요.</li>
-            <li>데이터는 apartments 테이블에 upsert 됩니다. 중복 거래는 자동 무시됩니다.</li>
-            <li>기간이 길수록 시간이 오래 걸립니다 (자치구 수 × 월 수 만큼 API 호출).</li>
-            <li>전체 기간(2006~현재) 적재 시 수십 분이 소요될 수 있습니다. 탭을 닫지 마세요.</li>
+            <li>공공데이터 포털(data.go.kr)에서 <strong className="text-[#191F28]">국토교통부 아파트 매매 실거래가</strong> 서비스 키를 발급받으세요.</li>
+            <li>데이터는 서버를 통해 수집되어 apartments 테이블에 저장됩니다. 중복 거래는 자동 무시됩니다.</li>
+            <li>기간이 길수록 시간이 오래 걸립니다 (자치구 수 × 월 수 만큼 서버 요청).</li>
             <li>이 페이지는 내비게이션에 노출되지 않습니다. URL 직접 접근: /admin</li>
           </ul>
         </div>

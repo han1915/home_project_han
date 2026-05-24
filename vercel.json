@@ -1,7 +1,11 @@
 {
   "buildCommand": "npm run build && node scripts/gen-index.mjs",
   "outputDirectory": "dist/client",
+  "functions": {
+    "api/ingest-month.ts": { "maxDuration": 300 }
+  },
   "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
