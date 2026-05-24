@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Ruler, Calendar, Heart } from "lucide-react";
+import { Ruler, Calendar, Heart, X, TrendingUp, TrendingDown, Building2 } from "lucide-react";
 import { SiteHeader } from "@/components/SiteHeader";
 import { Slider } from "@/components/ui/slider";
 import { supabase } from "@/integrations/supabase/client";
@@ -23,11 +23,13 @@ type Apt = {
   apt_name: string;
   sigun_gu: string;
   dong: string | null;
+  jibun: string | null;
   area_sqm: number | null;
   floor: number | null;
   building_year: number | null;
   contract_year: number;
   contract_month: number;
+  contract_day: number | null;
   price_man_won: number;
 };
 
@@ -37,6 +39,11 @@ function fmtPrice(p: number) {
   if (eok > 0 && man > 0) return `${eok}억 ${man.toLocaleString()}만`;
   if (eok > 0) return `${eok}억`;
   return `${man.toLocaleString()}만`;
+}
+
+function fmtDate(year: number, month: number, day?: number | null) {
+  if (day) return `${year}.${String(month).padStart(2, "0")}.${String(day).padStart(2, "0")}`;
+  return `${year}.${String(month).padStart(2, "0")}`;
 }
 
 function loadFavorites(): Set<string> {
@@ -50,12 +57,181 @@ function saveFavorites(fav: Set<string>) {
   localStorage.setItem("hd_favorites", JSON.stringify([...fav]));
 }
 
+// ─── Detail Modal ─────────────────────────────────────────────────────────────
+
+function AptDetailModal({
+  apt,
+  allData,
+  favorites,
+  onToggleFav,
+  onClose,
+}: {
+  apt: Apt;
+  allData: Apt[];
+  favorites: Set<string>;
+  onToggleFav: (id: string) => void;
+  onClose: () => void;
+}) {
+  const isFav = favorites.has(apt.id);
+
+  // Price per sqm
+  const pricePerSqm = apt.area_sqm && apt.area_sqm > 0
+    ? Math.round(apt.price_man_won / apt.area_sqm)
+    : null;
+
+  // Same apartment transaction history (same name + dong)
+  const history = useMemo(() => {
+    return allData
+      .filter(
+        (p) =>
+          p.apt_name === apt.apt_name &&
+          p.sigun_gu === apt.sigun_gu &&
+          (p.dong === apt.dong || (!p.dong && !apt.dong))
+      )
+      .sort((a, b) => {
+        const ka = a.contract_year * 100 + a.contract_month;
+        const kb = b.contract_year * 100 + b.contract_month;
+        return kb - ka;
+      })
+      .slice(0, 12);
+  }, [apt, allData]);
+
+  // Price trend vs previous transaction
+  const priceTrend = useMemo(() => {
+    const idx = history.findIndex((h) => h.id === apt.id);
+    if (idx === -1 || idx >= history.length - 1) return null;
+    const prev = history[idx + 1];
+    const change = apt.price_man_won - prev.price_man_won;
+    const pct = Math.round((change / prev.price_man_won) * 1000) / 10;
+    return { change, pct };
+  }, [apt, history]);
+
+  // Close on backdrop click or Escape
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="relative w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-2xl bg-white shadow-2xl">
+        {/* Header */}
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 rounded-t-3xl sm:rounded-t-2xl bg-white px-5 pt-5 pb-4 border-b border-[#E5E8EB]">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-semibold text-[#3182F6] bg-[#EFF6FF] px-2 py-0.5 rounded-md">
+                {apt.sigun_gu}
+              </span>
+              {apt.dong && <span className="text-xs text-[#8B95A1]">{apt.dong}</span>}
+            </div>
+            <h2 className="mt-1.5 text-xl font-bold text-[#191F28] leading-snug">{apt.apt_name}</h2>
+            <div className="mt-2 text-2xl font-extrabold text-[#3182F6]">{fmtPrice(apt.price_man_won)}</div>
+            {priceTrend && (
+              <div className={`mt-1 flex items-center gap-1 text-sm font-semibold ${priceTrend.pct > 0 ? "text-[#F04452]" : "text-emerald-600"}`}>
+                {priceTrend.pct > 0 ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
+                직전 거래 대비 {priceTrend.pct > 0 ? "+" : ""}{priceTrend.pct}%
+                <span className="text-[#8B95A1] font-normal">
+                  ({priceTrend.change > 0 ? "+" : ""}{fmtPrice(Math.abs(priceTrend.change))})
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-1 shrink-0 mt-1">
+            <button
+              onClick={() => onToggleFav(apt.id)}
+              className={`rounded-full p-2 transition ${
+                isFav ? "text-[#F04452] bg-[#F04452]/10" : "text-[#D1D6DB] hover:text-[#F04452] hover:bg-[#F04452]/10"
+              }`}
+              aria-label={isFav ? "찜 취소" : "찜하기"}
+            >
+              <Heart className={`h-5 w-5 ${isFav ? "fill-current" : ""}`} />
+            </button>
+            <button
+              onClick={onClose}
+              className="rounded-full p-2 text-[#8B95A1] hover:bg-[#F2F4F6] transition"
+              aria-label="닫기"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="px-5 py-5 space-y-6">
+          {/* Detail Grid */}
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { label: "거래일", value: fmtDate(apt.contract_year, apt.contract_month, apt.contract_day) },
+              { label: "전용면적", value: apt.area_sqm ? `${apt.area_sqm}㎡` : "-" },
+              { label: "층수", value: apt.floor ? `${apt.floor}층` : "-" },
+              { label: "건물연식", value: apt.building_year ? `${apt.building_year}년 준공` : "-" },
+              ...(pricePerSqm ? [{ label: "㎡당 거래가", value: `${pricePerSqm.toLocaleString()}만원` }] : []),
+              ...(apt.jibun ? [{ label: "지번", value: `${apt.dong ?? ""} ${apt.jibun}`.trim() }] : []),
+            ].map((item) => (
+              <div key={item.label} className="rounded-xl bg-[#F2F4F6] px-4 py-3">
+                <div className="text-xs text-[#8B95A1] mb-1">{item.label}</div>
+                <div className="font-semibold text-[#191F28] text-sm">{item.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Transaction History */}
+          {history.length > 1 && (
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-[#191F28] mb-3">
+                <Building2 className="h-4 w-4 text-[#3182F6]" />
+                {apt.apt_name} 거래 이력 ({history.length}건)
+              </h3>
+              <div className="space-y-2">
+                {history.map((h) => {
+                  const isThis = h.id === apt.id;
+                  return (
+                    <div
+                      key={h.id}
+                      className={`flex items-center justify-between rounded-xl px-4 py-3 text-sm ${
+                        isThis
+                          ? "bg-[#EFF6FF] border border-[#3182F6]/30"
+                          : "bg-[#F2F4F6]"
+                      }`}
+                    >
+                      <div className="text-[#8B95A1]">
+                        {fmtDate(h.contract_year, h.contract_month, h.contract_day)}
+                        {h.floor && <span className="ml-2">{h.floor}층</span>}
+                        {h.area_sqm && <span className="ml-2">{h.area_sqm}㎡</span>}
+                      </div>
+                      <div className={`font-bold number-tabular ${isThis ? "text-[#3182F6]" : "text-[#191F28]"}`}>
+                        {fmtPrice(h.price_man_won)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {history.length >= 12 && (
+                <p className="mt-2 text-xs text-[#8B95A1] text-center">최근 12건 표시</p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Search Page ──────────────────────────────────────────────────────────────
+
 function SearchPage() {
   const [gu, setGu] = useState("전체");
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 300000]);
-  const [areaRange, setAreaRange] = useState<[number, number]>([0, 300]);
   const [favorites, setFavorites] = useState<Set<string>>(loadFavorites);
   const [showFavOnly, setShowFavOnly] = useState(false);
+  const [selectedApt, setSelectedApt] = useState<Apt | null>(null);
 
   useEffect(() => { trackEvent("search_start"); }, []);
   useEffect(() => {
@@ -64,10 +240,9 @@ function SearchPage() {
       400,
     );
     return () => clearTimeout(t);
-  }, [gu, priceRange, areaRange]);
+  }, [gu, priceRange]);
 
-  const toggleFavorite = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
+  const toggleFavorite = (id: string) => {
     setFavorites((prev) => {
       const next = new Set(prev);
       if (next.has(id)) { next.delete(id); } else { next.add(id); trackEvent("favorite_add"); }
@@ -76,22 +251,18 @@ function SearchPage() {
     });
   };
 
-  // District-aware query: fetch all records for the selected district,
-  // or recent records when showing "전체"
   const { data, isLoading } = useQuery({
     queryKey: ["apartments", gu],
     queryFn: async () => {
       let q = supabase
         .from("apartments")
-        .select("id,apt_name,sigun_gu,dong,area_sqm,floor,building_year,contract_year,contract_month,price_man_won")
+        .select("id,apt_name,sigun_gu,dong,jibun,area_sqm,floor,building_year,contract_year,contract_month,contract_day,price_man_won")
         .order("contract_year", { ascending: false })
         .order("contract_month", { ascending: false });
 
       if (gu !== "전체") {
-        // Fetch all records for this district
         q = (q as any).eq("sigun_gu", gu).limit(10000);
       } else {
-        // Fetch recent records across all districts
         q = (q as any).limit(5000);
       }
 
@@ -108,14 +279,15 @@ function SearchPage() {
       if (showFavOnly && !favorites.has(p.id)) return false;
       if (gu !== "전체" && p.sigun_gu !== gu) return false;
       if (p.price_man_won < priceRange[0] || p.price_man_won > priceRange[1]) return false;
-      if (p.area_sqm != null && (p.area_sqm < areaRange[0] || p.area_sqm > areaRange[1])) return false;
       return true;
     });
-  }, [data, gu, priceRange, areaRange, favorites, showFavOnly]);
+  }, [data, gu, priceRange, favorites, showFavOnly]);
 
   return (
     <div className="min-h-screen bg-[#F2F4F6]">
       <SiteHeader />
+
+      {/* Page Header */}
       <div className="bg-white border-b border-[#E5E8EB] px-5 py-8">
         <div className="mx-auto max-w-7xl flex items-center justify-between">
           <div>
@@ -143,6 +315,7 @@ function SearchPage() {
       <div className="mx-auto max-w-7xl px-5 py-8 grid gap-8 lg:grid-cols-[260px_1fr]">
         {/* Filters */}
         <aside className="space-y-6 lg:sticky lg:top-20 lg:self-start">
+          {/* District */}
           <div className="card p-5">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">자치구</h3>
             <div className="flex flex-wrap gap-1.5">
@@ -162,6 +335,7 @@ function SearchPage() {
             </div>
           </div>
 
+          {/* Price */}
           <div className="card p-5">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">가격대 (만원)</h3>
             <Slider
@@ -173,20 +347,6 @@ function SearchPage() {
             <div className="flex justify-between text-xs text-[#8B95A1]">
               <span>{fmtPrice(priceRange[0])}</span>
               <span>{fmtPrice(priceRange[1])}{priceRange[1] >= 300000 ? "+" : ""}</span>
-            </div>
-          </div>
-
-          <div className="card p-5">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">전용면적 (㎡)</h3>
-            <Slider
-              value={areaRange}
-              min={0} max={300} step={5}
-              onValueChange={v => setAreaRange([v[0], v[1]] as [number, number])}
-              className="my-4"
-            />
-            <div className="flex justify-between text-xs text-[#8B95A1]">
-              <span>{areaRange[0]}㎡</span>
-              <span>{areaRange[1]}{areaRange[1] >= 300 ? "+" : ""}㎡</span>
             </div>
           </div>
         </aside>
@@ -218,21 +378,23 @@ function SearchPage() {
               {filtered.map((p) => (
                 <div
                   key={p.id}
-                  onClick={() => trackEvent("property_view")}
-                  className="card p-5 cursor-pointer hover:shadow-lg transition-shadow group"
+                  onClick={() => { setSelectedApt(p); trackEvent("property_view"); }}
+                  className="card p-5 cursor-pointer hover:shadow-lg transition-all hover:-translate-y-0.5 group"
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex-1 min-w-0">
-                      <span className="text-xs font-semibold text-[#3182F6] bg-[#EFF6FF] px-2 py-0.5 rounded-md">
-                        {p.sigun_gu}
-                      </span>
-                      {p.dong && <span className="ml-1 text-xs text-[#8B95A1]">{p.dong}</span>}
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <span className="text-xs font-semibold text-[#3182F6] bg-[#EFF6FF] px-2 py-0.5 rounded-md">
+                          {p.sigun_gu}
+                        </span>
+                        {p.dong && <span className="text-xs text-[#8B95A1]">{p.dong}</span>}
+                      </div>
                       <h3 className="mt-2 font-bold text-[#191F28] text-base leading-tight truncate">
                         {p.apt_name}
                       </h3>
                     </div>
                     <button
-                      onClick={(e) => toggleFavorite(e, p.id)}
+                      onClick={(e) => { e.stopPropagation(); toggleFavorite(p.id); }}
                       className={`ml-2 shrink-0 rounded-full p-1.5 transition ${
                         favorites.has(p.id)
                           ? "text-[#F04452] bg-[#F04452]/10"
@@ -248,7 +410,7 @@ function SearchPage() {
                     {fmtPrice(p.price_man_won)}
                   </div>
 
-                  <div className="mt-3 flex flex-wrap gap-3 text-xs text-[#8B95A1]">
+                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#8B95A1]">
                     {p.area_sqm != null && (
                       <span className="flex items-center gap-1">
                         <Ruler className="h-3 w-3" />{p.area_sqm}㎡
@@ -261,8 +423,13 @@ function SearchPage() {
                       </span>
                     )}
                     <span className="ml-auto font-medium text-[#191F28]">
-                      {p.contract_year}.{String(p.contract_month).padStart(2, "0")} 거래
+                      {fmtDate(p.contract_year, p.contract_month, p.contract_day)}
                     </span>
+                  </div>
+
+                  {/* Hover hint */}
+                  <div className="mt-3 text-xs text-[#8B95A1] opacity-0 group-hover:opacity-100 transition-opacity">
+                    클릭하여 거래 이력 보기 →
                   </div>
                 </div>
               ))}
@@ -270,6 +437,17 @@ function SearchPage() {
           )}
         </div>
       </div>
+
+      {/* Detail Modal */}
+      {selectedApt && (
+        <AptDetailModal
+          apt={selectedApt}
+          allData={data ?? []}
+          favorites={favorites}
+          onToggleFav={toggleFavorite}
+          onClose={() => setSelectedApt(null)}
+        />
+      )}
     </div>
   );
 }
