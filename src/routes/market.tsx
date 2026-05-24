@@ -47,14 +47,6 @@ function fmtPrice(p: number | null | undefined) {
   return `${man.toLocaleString()}만`;
 }
 
-function movingAvg(vals: (number | null)[], period: number): (number | null)[] {
-  return vals.map((_, i) => {
-    const w = vals.slice(Math.max(0, i - period + 1), i + 1).filter((v): v is number => v !== null);
-    if (w.length < period) return null;
-    return Math.round(w.reduce((s, v) => s + v, 0) / w.length);
-  });
-}
-
 function buildMonthlyChart(cur?: MonthlyRow[], prev?: MonthlyRow[]) {
   const rows = Array.from({ length: 12 }, (_, i) => {
     const m = i + 1;
@@ -67,8 +59,9 @@ function buildMonthlyChart(cur?: MonthlyRow[], prev?: MonthlyRow[]) {
       count:     c ? Number(c.tx_count)  : null,
     };
   });
-  const ma3 = movingAvg(rows.map(r => r.avgPrice), 3);
-  return rows.map((r, i) => ({ ...r, ma3: ma3[i] }));
+  // Trim trailing months with no current-year data (e.g. 2025 → show only through April)
+  let lastIdx = rows.findLastIndex(r => r.avgPrice !== null);
+  return lastIdx >= 0 ? rows.slice(0, lastIdx + 1) : rows;
 }
 
 // ─── MarketPage ───────────────────────────────────────────────────────────────
@@ -363,7 +356,7 @@ function SeoulTab({ selectedYear, yearlySeoul, monthlySeoulCur, monthlySeoulPrev
       </Section>
 
       {/* Monthly trend */}
-      <Section title={`${selectedYear}년 서울 월별 거래가 추이`} subtitle={`${prevYearLabel}년 동월 비교 · MA3 단기 추세선`}
+      <Section title={`${selectedYear}년 서울 월별 거래가 추이`} subtitle={`${prevYearLabel}년 동월 비교`}
         icon={<Activity className="h-5 w-5 text-[#3182F6]" />}>
         <div className="h-80">
           <ResponsiveContainer>
@@ -393,14 +386,9 @@ function SeoulTab({ selectedYear, yearlySeoul, monthlySeoulCur, monthlySeoulPrev
               <Bar yAxisId="count" dataKey="count" name="거래량" fill="#DBEAFE" radius={[3, 3, 0, 0]} />
               <Area yAxisId="price" type="monotone" dataKey="avgPrice" name={`${selectedYear}년 평균가`} stroke="#3182F6" fill="url(#seoulGrad)" strokeWidth={2.5} dot={{ r: 3, fill: "#3182F6" }} connectNulls />
               <Line yAxisId="price" type="monotone" dataKey="prevPrice" name={`${prevYearLabel}년 평균가`} stroke="#9CA3AF" strokeWidth={1.5} strokeDasharray="5 4" dot={false} connectNulls />
-              <Line yAxisId="price" type="monotone" dataKey="ma3" name="MA3(3개월)" stroke="#F59E0B" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
-        <p className="mt-3 text-xs text-[#8B95A1]">
-          <strong className="text-[#191F28]">MA3</strong>: 3개월 이동평균 단기 추세선 — 파란 선이 MA3 위면 상승 흐름.
-          &nbsp;|&nbsp; <strong className="text-[#191F28]">전년 동월</strong>: 같은 달의 {prevYearLabel}년 평균가.
-        </p>
       </Section>
 
       {/* District horizontal bar chart */}
@@ -573,7 +561,7 @@ function DistrictTab({ selectedYear, district, setDistrict, yearlyDistrict, year
           </Section>
 
           {/* Monthly trend */}
-          <Section title={`${district} ${selectedYear}년 월별 거래가 추이`} subtitle={`${prevYearLabel}년 동월 비교 · MA3 추세선`}
+          <Section title={`${district} ${selectedYear}년 월별 거래가 추이`} subtitle={`${prevYearLabel}년 동월 비교`}
             icon={<Activity className="h-5 w-5 text-[#3182F6]" />}>
             <div className="h-72">
               <ResponsiveContainer>
@@ -601,7 +589,6 @@ function DistrictTab({ selectedYear, district, setDistrict, yearlyDistrict, year
                   <Bar yAxisId="count" dataKey="count" name="거래량" fill="#DBEAFE" radius={[3, 3, 0, 0]} />
                   <Area yAxisId="price" type="monotone" dataKey="avgPrice" name={`${selectedYear}년 평균가`} stroke="#3182F6" fill="url(#distGrad)" strokeWidth={2.5} dot={{ r: 3, fill: "#3182F6" }} connectNulls />
                   <Line yAxisId="price" type="monotone" dataKey="prevPrice" name={`${prevYearLabel}년 평균가`} stroke="#9CA3AF" strokeWidth={1.5} strokeDasharray="5 4" dot={false} connectNulls />
-                  <Line yAxisId="price" type="monotone" dataKey="ma3" name="MA3(3개월)" stroke="#F59E0B" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
