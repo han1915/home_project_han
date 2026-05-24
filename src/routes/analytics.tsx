@@ -14,7 +14,7 @@ export const Route = createFileRoute("/analytics")({
   head: () => ({
     meta: [
       { title: "분석 대시보드 · HomeDirect" },
-      { name: "description", content: "방문 → 검색 → 매물 조회 → 찜 → 문의로 이어지는 사용자 퍼널과 병목 구간." },
+      { name: "description", content: "방문 → 검색 → 매물 조회 → 찜하기로 이어지는 사용자 퍼널과 병목 구간." },
     ],
   }),
   component: AnalyticsPage,
@@ -26,7 +26,6 @@ const FUNNEL_STEPS = [
   { key: "search_filter_apply", label: "필터 적용" },
   { key: "property_view", label: "매물 조회" },
   { key: "favorite_add", label: "찜하기" },
-  { key: "contact_click", label: "문의 클릭" },
 ] as const;
 
 type EventRow = { event_type: string; session_id: string; event_data: any; created_at: string };
@@ -78,7 +77,7 @@ function AnalyticsPage() {
       date: d.slice(5),
       home: dayMap[d].home_view?.size ?? 0,
       view: dayMap[d].property_view?.size ?? 0,
-      contact: dayMap[d].contact_click?.size ?? 0,
+      favorite: dayMap[d].favorite_add?.size ?? 0,
     }));
 
     const dist: Record<string, number> = {};
@@ -121,7 +120,7 @@ function AnalyticsPage() {
             사용자 행동 이벤트가 누적되면 자동으로 분석됩니다
           </h1>
           <p className="mt-3 text-[#8B95A1]">
-            홈 방문 → 검색 → 매물 조회 → 찜 → 문의로 이어지는 실제 클릭이 쌓이면 단계별 퍼널, 병목 구간, 인사이트가 이 화면에 나타납니다.
+            홈 방문 → 검색 → 매물 조회 → 찜하기로 이어지는 실제 클릭이 쌓이면 단계별 퍼널, 병목 구간, 인사이트가 이 화면에 나타납니다.
           </p>
         </div>
       </div>
@@ -148,7 +147,7 @@ function AnalyticsPage() {
         {/* KPI Cards */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <KPI label="총 세션" value={stats.totalSessions.toLocaleString()} icon={Users} />
-          <KPI label="홈 → 문의 전환율" value={`${stats.overallConv.toFixed(1)}%`} icon={TrendingDown} />
+          <KPI label="홈 → 찜 전환율" value={`${stats.overallConv.toFixed(1)}%`} icon={TrendingDown} />
           <KPI label="최대 병목 구간" value={bottleneck.step} icon={AlertTriangle} accent />
           <KPI label="병목 이탈률" value={`${bottleneck.dropoff.toFixed(1)}%`} icon={TrendingDown} accent />
         </div>
@@ -206,7 +205,7 @@ function AnalyticsPage() {
 
         {/* Charts row */}
         <div className="grid gap-6 lg:grid-cols-2">
-          <Section title="일별 트래픽 추이" subtitle="홈 방문, 매물 조회, 문의 클릭">
+          <Section title="일별 트래픽 추이" subtitle="홈 방문, 매물 조회, 찜하기">
             <div className="h-72">
               <ResponsiveContainer>
                 <LineChart data={stats.daily}>
@@ -224,7 +223,7 @@ function AnalyticsPage() {
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                   <Line type="monotone" dataKey="home" stroke="#191F28" strokeWidth={2} name="홈 방문" dot={false} />
                   <Line type="monotone" dataKey="view" stroke="#3182F6" strokeWidth={2} name="매물 조회" dot={false} />
-                  <Line type="monotone" dataKey="contact" stroke="#F04452" strokeWidth={2} name="문의" dot={false} />
+                  <Line type="monotone" dataKey="favorite" stroke="#F04452" strokeWidth={2} name="찜하기" dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -261,8 +260,8 @@ function AnalyticsPage() {
               tone="danger"
             />
             <InsightCard
-              title={`전체 전환 ${stats.overallConv.toFixed(1)}%`}
-              body={`${stats.totalSessions.toLocaleString()}개 세션 중 최종 문의까지 도달한 비율입니다. 업계 평균 1-3% 대비 위치를 점검하세요.`}
+              title={`전체 찜 전환 ${stats.overallConv.toFixed(1)}%`}
+              body={`${stats.totalSessions.toLocaleString()}개 세션 중 찜하기까지 도달한 비율입니다. 매물 카드 노출 및 찜 버튼 접근성을 점검하세요.`}
               tone="info"
             />
             <InsightCard
@@ -271,8 +270,8 @@ function AnalyticsPage() {
               tone="info"
             />
             <InsightCard
-              title="찜 → 문의 전환 점검"
-              body={`찜 ${stats.funnel[4].count}건 대비 문의 ${stats.funnel[5].count}건. 찜한 매물에 대한 알림/리마인더 도입 시 전환을 끌어올릴 여지가 있습니다.`}
+              title={`찜하기 ${stats.funnel[4].count}건 달성`}
+              body="찜한 매물에 대한 가격 변동 알림이나 유사 매물 추천 기능을 추가하면 재방문율을 끌어올릴 수 있습니다."
               tone="success"
             />
           </div>

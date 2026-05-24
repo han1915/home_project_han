@@ -106,7 +106,7 @@ function buildMonths(endYear: number, endMonth: number, periodMonths: number): s
 function MarketPage() {
   const now = new Date();
   const [activeTab, setActiveTab] = useState<"seoul" | "district">("seoul");
-  const [endYear, setEndYear] = useState(now.getFullYear());
+  const [endYear, setEndYear] = useState(2025);
   const [endMonth, setEndMonth] = useState(now.getMonth() + 1);
   const [periodMonths, setPeriodMonths] = useState(12);
   const [district, setDistrict] = useState("강남구");
@@ -120,6 +120,8 @@ function MarketPage() {
       const { data, error } = await supabase
         .from("apartments")
         .select("id,sigun_gu,price_man_won,area_sqm,contract_year,contract_month")
+        .gte("contract_year", 2022)
+        .lte("contract_year", 2025)
         .order("contract_year", { ascending: false })
         .order("contract_month", { ascending: false })
         .limit(100000);
@@ -161,6 +163,8 @@ function MarketPage() {
         .from("apartments")
         .select("id,apt_name,sigun_gu,price_man_won,area_sqm,floor,contract_year,contract_month")
         .eq("sigun_gu", district)
+        .gte("contract_year", 2022)
+        .lte("contract_year", 2025)
         .order("contract_year", { ascending: false })
         .order("contract_month", { ascending: false })
         .limit(20000);
@@ -172,10 +176,10 @@ function MarketPage() {
   });
 
   const availableYears = useMemo(() => {
-    if (!rawData?.length) return [now.getFullYear()];
+    if (!rawData?.length) return [2025, 2024, 2023, 2022];
     const years = [...new Set(rawData.map(p => p.contract_year).filter(Boolean) as number[])]
       .sort((a, b) => b - a);
-    return years.length ? years : [now.getFullYear()];
+    return years.length ? years : [2025, 2024, 2023, 2022];
   }, [rawData]);
 
   const isLoading = seoulLoading || (activeTab === "district" && distLoading);
@@ -384,7 +388,7 @@ function SeoulTab({
           ))}
         </FilterSelect>
         <FilterSelect label="조회 기간" value={String(periodMonths)} onChange={v => setPeriodMonths(Number(v))}>
-          {[6, 12, 24].map(m => <option key={m} value={m}>{m}개월</option>)}
+          {[6, 12, 24, 36].map(m => <option key={m} value={m}>{m}개월</option>)}
         </FilterSelect>
       </div>
 
