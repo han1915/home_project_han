@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SearchRouteImport } from './routes/search'
+import { Route as RegionRouteImport } from './routes/region'
 import { Route as MarketRouteImport } from './routes/market'
 import { Route as AnalyticsRouteImport } from './routes/analytics'
 import { Route as AdminRouteImport } from './routes/admin'
@@ -19,6 +20,11 @@ import { Route as PropertiesIdRouteImport } from './routes/properties.$id'
 const SearchRoute = SearchRouteImport.update({
   id: '/search',
   path: '/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RegionRoute = RegionRouteImport.update({
+  id: '/region',
+  path: '/region',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MarketRoute = MarketRouteImport.update({
@@ -52,6 +58,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRoute
   '/analytics': typeof AnalyticsRoute
   '/market': typeof MarketRoute
+  '/region': typeof RegionRoute
   '/search': typeof SearchRoute
   '/properties/$id': typeof PropertiesIdRoute
 }
@@ -60,6 +67,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminRoute
   '/analytics': typeof AnalyticsRoute
   '/market': typeof MarketRoute
+  '/region': typeof RegionRoute
   '/search': typeof SearchRoute
   '/properties/$id': typeof PropertiesIdRoute
 }
@@ -69,6 +77,7 @@ export interface FileRoutesById {
   '/admin': typeof AdminRoute
   '/analytics': typeof AnalyticsRoute
   '/market': typeof MarketRoute
+  '/region': typeof RegionRoute
   '/search': typeof SearchRoute
   '/properties/$id': typeof PropertiesIdRoute
 }
@@ -79,16 +88,25 @@ export interface FileRouteTypes {
     | '/admin'
     | '/analytics'
     | '/market'
+    | '/region'
     | '/search'
     | '/properties/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/admin' | '/analytics' | '/market' | '/search' | '/properties/$id'
+  to:
+    | '/'
+    | '/admin'
+    | '/analytics'
+    | '/market'
+    | '/region'
+    | '/search'
+    | '/properties/$id'
   id:
     | '__root__'
     | '/'
     | '/admin'
     | '/analytics'
     | '/market'
+    | '/region'
     | '/search'
     | '/properties/$id'
   fileRoutesById: FileRoutesById
@@ -98,6 +116,7 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRoute
   AnalyticsRoute: typeof AnalyticsRoute
   MarketRoute: typeof MarketRoute
+  RegionRoute: typeof RegionRoute
   SearchRoute: typeof SearchRoute
   PropertiesIdRoute: typeof PropertiesIdRoute
 }
@@ -109,6 +128,13 @@ declare module '@tanstack/react-router' {
       path: '/search'
       fullPath: '/search'
       preLoaderRoute: typeof SearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/region': {
+      id: '/region'
+      path: '/region'
+      fullPath: '/region'
+      preLoaderRoute: typeof RegionRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/market': {
@@ -154,6 +180,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRoute,
   AnalyticsRoute: AnalyticsRoute,
   MarketRoute: MarketRoute,
+  RegionRoute: RegionRoute,
   SearchRoute: SearchRoute,
   PropertiesIdRoute: PropertiesIdRoute,
 }

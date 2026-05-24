@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -80,13 +80,7 @@ const PRICE_BUCKETS = [
 ];
 
 const BAR_COLORS = [
-  "#BFDBFE",
-  "#93C5FD",
-  "#60A5FA",
-  "#3B82F6",
-  "#2563EB",
-  "#1D4ED8",
-  "#1E40AF",
+  "#BFDBFE", "#93C5FD", "#60A5FA", "#3B82F6", "#2563EB", "#1D4ED8", "#1E40AF",
 ];
 
 function pad(n: number) {
@@ -99,7 +93,7 @@ function ymKey(year: number, month: number) {
 
 function MarketPage() {
   const now = new Date();
-  const [selectedDistrict, setSelectedDistrict] = useState("전체");
+  const navigate = useNavigate();
   const [endYear, setEndYear] = useState(now.getFullYear());
   const [endMonth, setEndMonth] = useState(now.getMonth() + 1);
   const [periodMonths, setPeriodMonths] = useState(12);
@@ -118,14 +112,6 @@ function MarketPage() {
     },
   });
 
-  const districts = useMemo(() => {
-    if (!rawData) return ["전체"];
-    const set = [...new Set(rawData.map((p) => p.sigun_gu).filter(Boolean) as string[])].sort(
-      (a, b) => a.localeCompare(b, "ko"),
-    );
-    return ["전체", ...set];
-  }, [rawData]);
-
   const availableYears = useMemo(() => {
     if (!rawData) return [now.getFullYear()];
     const years = [...new Set(rawData.map((p) => p.contract_year).filter(Boolean) as number[])]
@@ -133,7 +119,7 @@ function MarketPage() {
     return years.length ? years : [now.getFullYear()];
   }, [rawData]);
 
-  // District stats table
+  // District stats table — all 25 districts
   const districtStats = useMemo(() => {
     if (!rawData) return [];
     const grouped: Record<string, number[]> = {};
@@ -152,7 +138,7 @@ function MarketPage() {
       .sort((a, b) => b.mean - a.mean);
   }, [rawData]);
 
-  // Monthly trend
+  // Monthly trend — all Seoul
   const monthlyTrend = useMemo(() => {
     if (!rawData) return [];
     const months: string[] = [];
@@ -161,13 +147,9 @@ function MarketPage() {
       months.push(ymKey(d.getFullYear(), d.getMonth() + 1));
     }
 
-    const filtered = rawData.filter(
-      (p) => selectedDistrict === "전체" || p.sigun_gu === selectedDistrict,
-    );
-
     const byMonth: Record<string, number[]> = {};
     for (const m of months) byMonth[m] = [];
-    for (const p of filtered) {
+    for (const p of rawData) {
       if (p.contract_year && p.contract_month) {
         const key = ymKey(p.contract_year, p.contract_month);
         if (byMonth[key] !== undefined && p.price_man_won) {
@@ -191,13 +173,12 @@ function MarketPage() {
       ma3: ma3[i],
       ma6: ma6[i],
     }));
-  }, [rawData, selectedDistrict, endYear, endMonth, periodMonths]);
+  }, [rawData, endYear, endMonth, periodMonths]);
 
-  // Price distribution
+  // Price distribution — all Seoul
   const priceDistribution = useMemo(() => {
     if (!rawData) return [];
     const prices = rawData
-      .filter((p) => selectedDistrict === "전체" || p.sigun_gu === selectedDistrict)
       .map((p) => p.price_man_won)
       .filter((p): p is number => p !== null);
     const total = prices.length;
@@ -206,19 +187,18 @@ function MarketPage() {
       const count = prices.filter((p) => p >= b.min && p < b.max).length;
       return { label: b.label, count, pct: Math.round((count / total) * 100) };
     }).filter((b) => b.count > 0);
-  }, [rawData, selectedDistrict]);
+  }, [rawData]);
 
-  // Overview stats
+  // Overview stats — all Seoul
   const overviewStats = useMemo(() => {
     if (!rawData) return null;
     const prices = rawData
-      .filter((p) => selectedDistrict === "전체" || p.sigun_gu === selectedDistrict)
       .map((p) => p.price_man_won)
       .filter((p): p is number => p !== null);
     return calcStats(prices);
-  }, [rawData, selectedDistrict]);
+  }, [rawData]);
 
-  // Momentum (month-over-month change)
+  // Momentum (month-over-month change per district)
   const momentum = useMemo(() => {
     if (!rawData || districtStats.length === 0) return [];
     const sorted = [...rawData]
@@ -277,7 +257,7 @@ function MarketPage() {
           <span className="inline-flex items-center gap-1.5 rounded-full bg-[#EFF6FF] px-3 py-1 text-xs font-semibold text-[#3182F6]">데이터 없음</span>
           <h1 className="mt-5 text-3xl font-bold text-[#191F28]">실거래 데이터를 먼저 적재해 주세요</h1>
           <p className="mt-3 text-[#8B95A1]">
-            관리자 페이지에서 국토부 실거래가 데이터를 가져오면 시세 분석이 자동으로 시작됩니다.
+            scripts/seed.mjs 로 국토부 실거래가 데이터를 가져오면 시세 분석이 자동으로 시작됩니다.
           </p>
         </div>
       </div>
@@ -295,18 +275,15 @@ function MarketPage() {
         <div className="mx-auto max-w-7xl px-5 py-8">
           <h1 className="text-2xl font-bold text-[#191F28]">시세 분석</h1>
           <p className="mt-1 text-sm text-[#8B95A1]">
-            구별 평균·표준편차 기반 시세 범위, 월별 이동평균(MA), 가격대 분포
+            서울 전체 25개 자치구 시세 비교 · 월별 이동평균(MA) · 가격대 분포
           </p>
         </div>
       </div>
 
       <div className="mx-auto max-w-7xl space-y-8 px-5 py-8">
 
-        {/* Controls */}
+        {/* Controls — no district selector */}
         <div className="card p-5 flex flex-wrap items-center gap-4">
-          <FilterSelect label="자치구" value={selectedDistrict} onChange={setSelectedDistrict}>
-            {districts.map((d) => <option key={d}>{d}</option>)}
-          </FilterSelect>
           <FilterSelect label="기준 년도" value={String(endYear)} onChange={(v) => setEndYear(Number(v))}>
             {availableYears.map((y) => <option key={y}>{y}</option>)}
           </FilterSelect>
@@ -320,22 +297,31 @@ function MarketPage() {
               <option key={m} value={m}>{m}개월</option>
             ))}
           </FilterSelect>
+          <span className="ml-auto text-xs text-[#8B95A1]">
+            자치구 상세 분석 →{" "}
+            <button
+              onClick={() => navigate({ to: "/region" })}
+              className="text-[#3182F6] font-semibold hover:underline"
+            >
+              지역 분석
+            </button>
+          </span>
         </div>
 
         {/* KPI Cards */}
         {overviewStats && (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard label="평균 거래가" value={fmtPrice(overviewStats.mean)} sub={`${overviewStats.count.toLocaleString()}건 기준`} />
-            <StatCard label="중위 거래가" value={fmtPrice(overviewStats.median)} sub="이상치 영향 최소화" />
-            <StatCard label="거래량" value={overviewStats.count.toLocaleString()} sub="전체 데이터 건수" />
-            <StatCard label="최고가" value={fmtPrice(overviewStats.max)} sub="데이터 내 최고 거래가" tone="accent" />
+            <StatCard label="서울 평균 거래가" value={fmtPrice(overviewStats.mean)} sub={`${overviewStats.count.toLocaleString()}건 기준`} />
+            <StatCard label="서울 중위 거래가" value={fmtPrice(overviewStats.median)} sub="이상치 영향 최소화" />
+            <StatCard label="총 거래량" value={overviewStats.count.toLocaleString()} sub="서울 25개 자치구 합산" />
+            <StatCard label="최고 거래가" value={fmtPrice(overviewStats.max)} sub="데이터 내 최고 거래가" tone="accent" />
           </div>
         )}
 
-        {/* Monthly Trend Chart */}
+        {/* Monthly Trend Chart — all Seoul */}
         <Section
-          title="월별 평균 거래가"
-          subtitle={`${selectedDistrict} · MA3(단기) · MA6(중기) 보조지표 포함`}
+          title="서울 월별 평균 거래가"
+          subtitle="서울 전체 · MA3(단기) · MA6(중기) 보조지표 포함"
           icon={<Activity className="h-5 w-5 text-[#3182F6]" />}
         >
           <div className="h-80">
@@ -374,46 +360,10 @@ function MarketPage() {
                   }}
                 />
                 <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
-                <Bar
-                  yAxisId="count"
-                  dataKey="count"
-                  name="거래량"
-                  fill="#BFDBFE"
-                  opacity={0.7}
-                  radius={[3, 3, 0, 0]}
-                />
-                <Line
-                  yAxisId="price"
-                  type="monotone"
-                  dataKey="avgPrice"
-                  name="평균 거래가"
-                  stroke="#191F28"
-                  strokeWidth={2.5}
-                  dot={false}
-                  connectNulls
-                />
-                <Line
-                  yAxisId="price"
-                  type="monotone"
-                  dataKey="ma3"
-                  name="MA3 단기"
-                  stroke="#3182F6"
-                  strokeWidth={2}
-                  strokeDasharray="7 3"
-                  dot={false}
-                  connectNulls
-                />
-                <Line
-                  yAxisId="price"
-                  type="monotone"
-                  dataKey="ma6"
-                  name="MA6 중기"
-                  stroke="#F04452"
-                  strokeWidth={2}
-                  strokeDasharray="3 5"
-                  dot={false}
-                  connectNulls
-                />
+                <Bar yAxisId="count" dataKey="count" name="거래량" fill="#BFDBFE" opacity={0.7} radius={[3, 3, 0, 0]} />
+                <Line yAxisId="price" type="monotone" dataKey="avgPrice" name="평균 거래가" stroke="#191F28" strokeWidth={2.5} dot={false} connectNulls />
+                <Line yAxisId="price" type="monotone" dataKey="ma3" name="MA3 단기" stroke="#3182F6" strokeWidth={2} strokeDasharray="7 3" dot={false} connectNulls />
+                <Line yAxisId="price" type="monotone" dataKey="ma6" name="MA6 중기" stroke="#F04452" strokeWidth={2} strokeDasharray="3 5" dot={false} connectNulls />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -421,7 +371,6 @@ function MarketPage() {
             <p className="text-xs leading-relaxed text-[#8B95A1]">
               <span className="font-semibold text-[#191F28]">MA3(단기)</span>는 최근 3개월 이동평균으로 단기 추세 반전을,{" "}
               <span className="font-semibold text-[#191F28]">MA6(중기)</span>는 6개월 이동평균으로 중기 시장 방향을 나타냅니다.
-              평균가가 MA6 위에 있으면 상승 흐름, 아래면 하락 흐름으로 해석합니다.
             </p>
           </div>
         </Section>
@@ -429,13 +378,14 @@ function MarketPage() {
         {/* District Comparison Table */}
         <Section
           title="자치구별 시세 비교"
-          subtitle="평균가 ± 표준편차(1σ) 기반 정상 거래 범위 · 행 클릭 시 해당 구로 전환"
+          subtitle="평균가 기준 내림차순 · 행 클릭 시 지역 분석 페이지로 이동"
           icon={<BarChart2 className="h-5 w-5 text-[#3182F6]" />}
         >
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[#E5E8EB] text-xs text-[#8B95A1]">
+                  <th className="pb-3 text-left font-medium w-8">순위</th>
                   <th className="pb-3 text-left font-medium">자치구</th>
                   <th className="pb-3 text-right font-medium">거래건수</th>
                   <th className="pb-3 text-right font-medium">중위가</th>
@@ -446,20 +396,18 @@ function MarketPage() {
                 </tr>
               </thead>
               <tbody>
-                {districtStats.map((s) => {
+                {districtStats.map((s, idx) => {
                   const lowerPct = Math.min(95, (s.lower / globalMaxUpper) * 100);
                   const meanPct = Math.min(97, (s.mean / globalMaxUpper) * 100);
                   const upperPct = Math.min(100, (s.upper / globalMaxUpper) * 100);
-                  const isSelected = selectedDistrict === s.district;
                   return (
                     <tr
                       key={s.district}
-                      onClick={() => setSelectedDistrict(s.district)}
-                      className={`cursor-pointer border-b border-[#E5E8EB]/50 transition hover:bg-[#F2F4F6] ${
-                        isSelected ? "bg-[#EFF6FF]" : ""
-                      }`}
+                      onClick={() => navigate({ to: "/region", search: { district: s.district } as any })}
+                      className="cursor-pointer border-b border-[#E5E8EB]/50 transition hover:bg-[#EFF6FF]"
                     >
-                      <td className={`py-3 font-medium ${isSelected ? "text-[#3182F6]" : "text-[#191F28]"}`}>
+                      <td className="py-3 text-[#8B95A1] text-xs">{idx + 1}</td>
+                      <td className="py-3 font-medium text-[#191F28] hover:text-[#3182F6]">
                         {s.district}
                       </td>
                       <td className="py-3 text-right text-[#8B95A1] number-tabular">{s.count.toLocaleString()}</td>
@@ -471,10 +419,7 @@ function MarketPage() {
                         <div className="relative h-3 w-36 overflow-hidden rounded-full bg-[#F2F4F6]">
                           <div
                             className="absolute h-full rounded-full bg-[#3182F6]/20"
-                            style={{
-                              left: `${lowerPct}%`,
-                              width: `${Math.max(0, upperPct - lowerPct)}%`,
-                            }}
+                            style={{ left: `${lowerPct}%`, width: `${Math.max(0, upperPct - lowerPct)}%` }}
                           />
                           <div
                             className="absolute top-0.5 h-2 w-1 rounded-sm bg-[#3182F6]"
@@ -492,14 +437,15 @@ function MarketPage() {
             <p className="text-xs text-[#8B95A1]">
               시세 하한/상한 = 평균 ± 표준편차(1σ). 정규분포 가정 시 전체 거래의 약{" "}
               <strong className="text-[#191F28]">68%</strong>가 이 구간 내에 분포합니다.
+              행 클릭 시 해당 구의 상세 분석으로 이동합니다.
             </p>
           </div>
         </Section>
 
-        {/* Price Distribution Chart */}
+        {/* Price Distribution Chart — all Seoul */}
         <Section
-          title="가격대 분포"
-          subtitle={`${selectedDistrict} 실거래 건수 비중`}
+          title="서울 가격대 분포"
+          subtitle="서울 전체 실거래 건수 비중"
           icon={<BarChart2 className="h-5 w-5 text-[#3182F6]" />}
         >
           <div className="h-64">
@@ -512,7 +458,7 @@ function MarketPage() {
                   fontSize={12}
                   tick={{ fill: "#8B95A1" }}
                   tickFormatter={(v) => `${v}건`}
-                  width={48}
+                  width={52}
                 />
                 <Tooltip
                   contentStyle={{
@@ -522,8 +468,7 @@ function MarketPage() {
                     boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
                   }}
                   formatter={(value: number, _: string, { payload }: any) => [
-                    `${value.toLocaleString()}건 · 전체의 ${payload.pct}%`,
-                    "거래건수",
+                    `${value.toLocaleString()}건 · 전체의 ${payload.pct}%`, "거래건수",
                   ]}
                 />
                 <Bar dataKey="count" name="거래건수" radius={[6, 6, 0, 0]}>
@@ -536,14 +481,8 @@ function MarketPage() {
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             {priceDistribution.map((b, idx) => (
-              <span
-                key={b.label}
-                className="inline-flex items-center gap-1.5 rounded-full border border-[#E5E8EB] px-3 py-1 text-xs"
-              >
-                <span
-                  className="inline-block h-2 w-2 rounded-full"
-                  style={{ background: BAR_COLORS[Math.min(idx, BAR_COLORS.length - 1)] }}
-                />
+              <span key={b.label} className="inline-flex items-center gap-1.5 rounded-full border border-[#E5E8EB] px-3 py-1 text-xs">
+                <span className="inline-block h-2 w-2 rounded-full" style={{ background: BAR_COLORS[Math.min(idx, BAR_COLORS.length - 1)] }} />
                 {b.label} · {b.pct}%
               </span>
             ))}
@@ -554,7 +493,7 @@ function MarketPage() {
         {momentum.length > 0 && (
           <Section
             title="구별 최근 거래가 변동"
-            subtitle="직전 월 대비 평균 거래가 등락률 (데이터 충분한 구 기준)"
+            subtitle="직전 월 대비 평균 거래가 등락률 · 클릭 시 지역 분석"
             icon={<TrendingUp className="h-5 w-5 text-[#3182F6]" />}
           >
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -564,27 +503,15 @@ function MarketPage() {
                 return (
                   <button
                     key={m.district}
-                    onClick={() => setSelectedDistrict(m.district)}
+                    onClick={() => navigate({ to: "/region", search: { district: m.district } as any })}
                     className="flex items-center justify-between rounded-xl border border-[#E5E8EB] bg-white px-4 py-3 text-left transition hover:border-[#3182F6]/50 hover:bg-[#F2F4F6]"
                   >
                     <div>
                       <div className="font-medium text-[#191F28]">{m.district}</div>
-                      <div className="mt-0.5 text-xs text-[#8B95A1] number-tabular">
-                        {fmtPrice(m.latestMean)}
-                      </div>
+                      <div className="mt-0.5 text-xs text-[#8B95A1] number-tabular">{fmtPrice(m.latestMean)}</div>
                     </div>
-                    <div
-                      className={`flex items-center gap-1 text-sm font-bold number-tabular ${
-                        flat ? "text-[#8B95A1]" : up ? "text-emerald-600" : "text-[#F04452]"
-                      }`}
-                    >
-                      {flat ? (
-                        <Minus className="h-4 w-4" />
-                      ) : up ? (
-                        <TrendingUp className="h-4 w-4" />
-                      ) : (
-                        <TrendingDown className="h-4 w-4" />
-                      )}
+                    <div className={`flex items-center gap-1 text-sm font-bold number-tabular ${flat ? "text-[#8B95A1]" : up ? "text-emerald-600" : "text-[#F04452]"}`}>
+                      {flat ? <Minus className="h-4 w-4" /> : up ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
                       {up ? "+" : ""}{m.changePct}%
                     </div>
                   </button>
@@ -599,15 +526,9 @@ function MarketPage() {
 }
 
 function FilterSelect({
-  label,
-  value,
-  onChange,
-  children,
+  label, value, onChange, children,
 }: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  children: React.ReactNode;
+  label: string; value: string; onChange: (v: string) => void; children: React.ReactNode;
 }) {
   return (
     <div className="flex items-center gap-2">
@@ -625,16 +546,8 @@ function FilterSelect({
   );
 }
 
-function StatCard({
-  label,
-  value,
-  sub,
-  tone,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  tone?: "accent";
+function StatCard({ label, value, sub, tone }: {
+  label: string; value: string; sub?: string; tone?: "accent";
 }) {
   return (
     <div className="card p-5">
@@ -647,16 +560,8 @@ function StatCard({
   );
 }
 
-function Section({
-  title,
-  subtitle,
-  icon,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  icon?: React.ReactNode;
-  children: React.ReactNode;
+function Section({ title, subtitle, icon, children }: {
+  title: string; subtitle?: string; icon?: React.ReactNode; children: React.ReactNode;
 }) {
   return (
     <section>
