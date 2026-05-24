@@ -44,7 +44,6 @@ function PropertyDetail() {
   };
 
   const onContact = () => {
-    trackEvent("contact_click", { property_id: id });
     toast.success("문의가 접수되었습니다 (데모)");
   };
 

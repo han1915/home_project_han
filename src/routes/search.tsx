@@ -198,7 +198,13 @@ function SearchPage() {
   const toggleFavorite = (id: string) => {
     setFavorites(prev => {
       const next = new Set(prev);
-      if (next.has(id)) { next.delete(id); } else { next.add(id); trackEvent("favorite_add"); }
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+        const prop = data?.find(p => p.id === id);
+        trackEvent("favorite_add", { property_id: id, sigun_gu: prop?.sigun_gu, apt_name: prop?.apt_name });
+      }
       saveFavorites(next);
       return next;
     });
@@ -292,7 +298,7 @@ function SearchPage() {
             <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">자치구</h3>
             <div className="flex flex-wrap gap-1.5">
               {DISTRICTS.map(d => (
-                <button key={d} onClick={() => setGu(d)}
+                <button key={d} onClick={() => { setGu(d); if (d !== "전체") trackEvent("search_filter_apply", { sigun_gu: d, year, month }); }}
                   className={`rounded-lg border px-2.5 py-1 text-xs transition ${
                     gu === d ? "border-[#3182F6] bg-[#3182F6] text-white" : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
                   }`}>
@@ -307,7 +313,7 @@ function SearchPage() {
             <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">거래 연도</h3>
             <div className="flex flex-wrap gap-1.5">
               {YEARS.map(y => (
-                <button key={y} onClick={() => setYear(y)}
+                <button key={y} onClick={() => { setYear(y); if (y !== "전체") trackEvent("search_filter_apply", { sigun_gu: gu, year: y, month }); }}
                   className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
                     year === y ? "border-[#3182F6] bg-[#3182F6] text-white" : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
                   }`}>
@@ -327,7 +333,7 @@ function SearchPage() {
                     month === "전체" ? "border-[#3182F6] bg-[#3182F6] text-white" : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
                   }`}>전체</button>
                 {MONTHS.map(m => (
-                  <button key={m} onClick={() => setMonth(String(m))}
+                  <button key={m} onClick={() => { setMonth(String(m)); trackEvent("search_filter_apply", { sigun_gu: gu, year, month: String(m) }); }}
                     className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
                       month === String(m) ? "border-[#3182F6] bg-[#3182F6] text-white" : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
                     }`}>
@@ -389,7 +395,7 @@ function SearchPage() {
               <div className="grid gap-3 sm:grid-cols-2">
                 {shown.map(p => (
                   <div key={p.id}
-                    onClick={() => { setSelectedApt(p); trackEvent("property_view"); }}
+                    onClick={() => { setSelectedApt(p); trackEvent("property_view", { property_id: p.id, apt_name: p.apt_name, sigun_gu: p.sigun_gu, price_man_won: p.price_man_won }); }}
                     className="card p-5 cursor-pointer hover:shadow-lg transition-all hover:-translate-y-0.5 group"
                   >
                     <div className="flex items-start justify-between">

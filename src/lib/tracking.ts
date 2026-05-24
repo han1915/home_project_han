@@ -1,6 +1,6 @@
 export type EventType =
   | "home_view" | "search_start" | "search_filter_apply"
-  | "property_view" | "favorite_add" | "contact_click"
+  | "property_view" | "favorite_add"
   | "analytics_view" | "market_view";
 
 const SESSION_KEY = "hd_session";
