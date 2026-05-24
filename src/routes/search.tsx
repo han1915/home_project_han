@@ -43,9 +43,7 @@ function loadFavorites(): Set<string> {
   try {
     const stored = localStorage.getItem("hd_favorites");
     return stored ? new Set(JSON.parse(stored)) : new Set();
-  } catch {
-    return new Set();
-  }
+  } catch { return new Set(); }
 }
 
 function saveFavorites(fav: Set<string>) {
@@ -72,29 +70,36 @@ function SearchPage() {
     e.stopPropagation();
     setFavorites((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-        trackEvent("favorite_add");
-      }
+      if (next.has(id)) { next.delete(id); } else { next.add(id); trackEvent("favorite_add"); }
       saveFavorites(next);
       return next;
     });
   };
 
+  // District-aware query: fetch all records for the selected district,
+  // or recent records when showing "전체"
   const { data, isLoading } = useQuery({
-    queryKey: ["apartments"],
+    queryKey: ["apartments", gu],
     queryFn: async () => {
-      const { data, error } = await supabase
+      let q = supabase
         .from("apartments")
         .select("id,apt_name,sigun_gu,dong,area_sqm,floor,building_year,contract_year,contract_month,price_man_won")
         .order("contract_year", { ascending: false })
-        .order("contract_month", { ascending: false })
-        .limit(1000);
+        .order("contract_month", { ascending: false });
+
+      if (gu !== "전체") {
+        // Fetch all records for this district
+        q = (q as any).eq("sigun_gu", gu).limit(10000);
+      } else {
+        // Fetch recent records across all districts
+        q = (q as any).limit(5000);
+      }
+
+      const { data, error } = await q;
       if (error) throw error;
       return data as Apt[];
     },
+    staleTime: 5 * 60 * 1000,
   });
 
   const filtered = useMemo(() => {
@@ -118,10 +123,11 @@ function SearchPage() {
             <p className="mt-1 text-sm text-[#8B95A1]">
               조건에 맞는 실거래{" "}
               <span className="font-semibold text-[#3182F6]">{filtered.length.toLocaleString()}건</span>
+              {data && <span className="ml-1 text-[#8B95A1]">/ 조회 {data.length.toLocaleString()}건</span>}
             </p>
           </div>
           <button
-            onClick={() => setShowFavOnly((v) => !v)}
+            onClick={() => setShowFavOnly(v => !v)}
             className={`flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium transition ${
               showFavOnly
                 ? "border-[#F04452] bg-[#F04452]/10 text-[#F04452]"
@@ -160,10 +166,8 @@ function SearchPage() {
             <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">가격대 (만원)</h3>
             <Slider
               value={priceRange}
-              min={0}
-              max={300000}
-              step={5000}
-              onValueChange={(v) => setPriceRange([v[0], v[1]] as [number, number])}
+              min={0} max={300000} step={5000}
+              onValueChange={v => setPriceRange([v[0], v[1]] as [number, number])}
               className="my-4"
             />
             <div className="flex justify-between text-xs text-[#8B95A1]">
@@ -176,10 +180,8 @@ function SearchPage() {
             <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">전용면적 (㎡)</h3>
             <Slider
               value={areaRange}
-              min={0}
-              max={300}
-              step={5}
-              onValueChange={(v) => setAreaRange([v[0], v[1]] as [number, number])}
+              min={0} max={300} step={5}
+              onValueChange={v => setAreaRange([v[0], v[1]] as [number, number])}
               className="my-4"
             />
             <div className="flex justify-between text-xs text-[#8B95A1]">
@@ -192,17 +194,18 @@ function SearchPage() {
         {/* Results */}
         <div>
           {isLoading ? (
-            <div className="flex items-center justify-center py-24 text-[#8B95A1]">불러오는 중...</div>
+            <div className="flex items-center justify-center py-24 text-[#8B95A1]">
+              <div className="text-center">
+                <div className="mb-2 text-base font-medium">{gu !== "전체" ? `${gu} 데이터` : "실거래 데이터"} 불러오는 중...</div>
+              </div>
+            </div>
           ) : filtered.length === 0 ? (
             <div className="card flex flex-col items-center justify-center py-24 gap-3 text-[#8B95A1]">
               {showFavOnly ? (
                 <>
                   <Heart className="h-8 w-8 text-[#E5E8EB]" />
                   <p>찜한 매물이 없습니다.</p>
-                  <button
-                    onClick={() => setShowFavOnly(false)}
-                    className="text-sm text-[#3182F6] underline"
-                  >
+                  <button onClick={() => setShowFavOnly(false)} className="text-sm text-[#3182F6] underline">
                     전체 목록 보기
                   </button>
                 </>
