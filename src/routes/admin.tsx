@@ -188,15 +188,19 @@ function AdminPage() {
 
           attempted += rows.length;
 
-          // Upsert in chunks of 500
+          // Upsert in chunks of 500 — onConflict matches the apartments_unique_tx constraint
           for (let i = 0; i < rows.length; i += 500) {
             const chunk = rows.slice(i, i + 500);
-            const { error } = await supabase.from("apartments").upsert(chunk as any, {
+            const { error: upsertErr } = await supabase.from("apartments").upsert(chunk as any, {
               onConflict:
-                "apt_name,sigun_gu,dong,area_sqm,floor,contract_year,contract_month,contract_day,price_man_won",
+                "sigun_gu,apt_name,dong,area_sqm,floor,contract_year,contract_month,contract_day,price_man_won",
               ignoreDuplicates: true,
             });
-            if (!error) inserted += chunk.length;
+            if (upsertErr) {
+              console.error("Upsert chunk failed:", upsertErr.message, upsertErr.details);
+              throw new Error(`DB 오류: ${upsertErr.message}`);
+            }
+            inserted += chunk.length;
           }
         }
       }

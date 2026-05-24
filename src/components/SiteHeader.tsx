@@ -13,7 +13,6 @@ export function SiteHeader() {
             { to: "/", label: "홈" },
             { to: "/search", label: "실거래 조회" },
             { to: "/market", label: "시세 분석" },
-            { to: "/analytics", label: "분석 대시보드" },
           ].map((l) => (
             <Link
               key={l.to}
