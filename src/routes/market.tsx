@@ -1,11 +1,11 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, CartesianGrid,
+  ComposedChart, Bar, Line, Area, XAxis, YAxis, Tooltip, CartesianGrid,
   ResponsiveContainer, Legend, BarChart, Cell,
 } from "recharts";
-import { Activity, BarChart2, TrendingUp, TrendingDown, Minus, MapPin, Home } from "lucide-react";
+import { Activity, BarChart2, TrendingUp, TrendingDown, Minus, Home } from "lucide-react";
 import { SiteHeader } from "@/components/SiteHeader";
 import { supabase } from "@/integrations/supabase/client";
 import { trackEvent } from "@/lib/tracking";
@@ -14,11 +14,13 @@ export const Route = createFileRoute("/market")({
   head: () => ({
     meta: [
       { title: "시세 분석 · HomeDirect" },
-      { name: "description", content: "서울 아파트 구별 시세 분석, 월별 이동평균, 가격대 분포, 자치구 상세 분석" },
+      { name: "description", content: "서울 아파트 구별 시세 분석, 전년 동월 비교, 월별 추세, 자치구 상세 분석" },
     ],
   }),
   component: MarketPage,
 });
+
+const AVAILABLE_YEARS = [2025, 2024, 2023, 2022];
 
 const SEOUL_DISTRICTS = [
   "강남구","강동구","강북구","강서구","관악구",
@@ -89,39 +91,24 @@ function movingAvg(values: (number | null)[], period: number): (number | null)[]
   });
 }
 
-function pad(n: number) { return n < 10 ? `0${n}` : `${n}`; }
-function ymKey(year: number, month: number) { return `${year}-${pad(month)}`; }
-
-function buildMonths(endYear: number, endMonth: number, periodMonths: number): string[] {
-  const months: string[] = [];
-  for (let i = periodMonths - 1; i >= 0; i--) {
-    const d = new Date(endYear, endMonth - 1 - i, 1);
-    months.push(ymKey(d.getFullYear(), d.getMonth() + 1));
-  }
-  return months;
-}
-
 // ─── MarketPage ──────────────────────────────────────────────────────────────
 
 function MarketPage() {
-  const now = new Date();
   const [activeTab, setActiveTab] = useState<"seoul" | "district">("seoul");
-  const [endYear, setEndYear] = useState(2025);
-  const [endMonth, setEndMonth] = useState(now.getMonth() + 1);
-  const [periodMonths, setPeriodMonths] = useState(12);
+  const [selectedYear, setSelectedYear] = useState(2025);
   const [district, setDistrict] = useState("강남구");
 
   useEffect(() => { trackEvent("market_view"); }, []);
 
-  // All Seoul data — high limit, sorted recent first
+  // Seoul: fetch current year + prev year for YoY comparison
   const { data: rawData, isLoading: seoulLoading } = useQuery({
-    queryKey: ["market_seoul_all"],
+    queryKey: ["market_seoul", selectedYear],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("apartments")
         .select("id,sigun_gu,price_man_won,area_sqm,contract_year,contract_month")
-        .gte("contract_year", 2022)
-        .lte("contract_year", 2025)
+        .gte("contract_year", selectedYear - 1)
+        .lte("contract_year", selectedYear)
         .order("contract_year", { ascending: false })
         .order("contract_month", { ascending: false })
         .limit(100000);
@@ -131,40 +118,16 @@ function MarketPage() {
     staleTime: 10 * 60 * 1000,
   });
 
-  // Auto-adjust end date to latest available data month
-  const latestYM = useMemo(() => {
-    if (!rawData?.length) return null;
-    let maxTime = 0;
-    for (const p of rawData) {
-      if (p.contract_year && p.contract_month) {
-        const t = p.contract_year * 100 + p.contract_month;
-        if (t > maxTime) maxTime = t;
-      }
-    }
-    if (!maxTime) return null;
-    return { year: Math.floor(maxTime / 100), month: maxTime % 100 };
-  }, [rawData]);
-
-  useEffect(() => {
-    if (!latestYM) return;
-    const curTime = endYear * 100 + endMonth;
-    const latestTime = latestYM.year * 100 + latestYM.month;
-    if (curTime > latestTime) {
-      setEndYear(latestYM.year);
-      setEndMonth(latestYM.month);
-    }
-  }, [latestYM]);
-
-  // District data — separate query, per-district
+  // District: fetch current year + prev year
   const { data: distData, isLoading: distLoading } = useQuery({
-    queryKey: ["market_district", district],
+    queryKey: ["market_district", district, selectedYear],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("apartments")
         .select("id,apt_name,sigun_gu,price_man_won,area_sqm,floor,contract_year,contract_month")
         .eq("sigun_gu", district)
-        .gte("contract_year", 2022)
-        .lte("contract_year", 2025)
+        .gte("contract_year", selectedYear - 1)
+        .lte("contract_year", selectedYear)
         .order("contract_year", { ascending: false })
         .order("contract_month", { ascending: false })
         .limit(20000);
@@ -174,15 +137,6 @@ function MarketPage() {
     enabled: activeTab === "district",
     staleTime: 5 * 60 * 1000,
   });
-
-  const availableYears = useMemo(() => {
-    if (!rawData?.length) return [2025, 2024, 2023, 2022];
-    const years = [...new Set(rawData.map(p => p.contract_year).filter(Boolean) as number[])]
-      .sort((a, b) => b - a);
-    return years.length ? years : [2025, 2024, 2023, 2022];
-  }, [rawData]);
-
-  const isLoading = seoulLoading || (activeTab === "district" && distLoading);
 
   if (seoulLoading) {
     return (
@@ -214,23 +168,42 @@ function MarketPage() {
         <div className="mx-auto max-w-7xl px-5 py-6">
           <h1 className="text-2xl font-bold text-[#191F28]">시세 분석</h1>
           <p className="mt-1 text-sm text-[#8B95A1]">
-            서울 25개 자치구 시세 비교 · 월별 추세 · 자치구별 상세 분석
+            서울 25개 자치구 시세 비교 · 전년 동월 비교 · 자치구별 상세 분석
           </p>
-          {/* Tab switcher */}
-          <div className="mt-5 inline-flex gap-1 rounded-xl bg-[#F2F4F6] p-1">
-            {(["seoul", "district"] as const).map((t) => (
-              <button
-                key={t}
-                onClick={() => setActiveTab(t)}
-                className={`rounded-lg px-5 py-2 text-sm font-semibold transition ${
-                  activeTab === t
-                    ? "bg-white text-[#191F28] shadow-sm"
-                    : "text-[#8B95A1] hover:text-[#191F28]"
-                }`}
-              >
-                {t === "seoul" ? "서울 전체" : "자치구 분석"}
-              </button>
-            ))}
+          <div className="mt-5 flex flex-wrap items-center gap-5">
+            {/* Tab switcher */}
+            <div className="inline-flex gap-1 rounded-xl bg-[#F2F4F6] p-1">
+              {(["seoul", "district"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setActiveTab(t)}
+                  className={`rounded-lg px-5 py-2 text-sm font-semibold transition ${
+                    activeTab === t ? "bg-white text-[#191F28] shadow-sm" : "text-[#8B95A1] hover:text-[#191F28]"
+                  }`}
+                >
+                  {t === "seoul" ? "서울 전체" : "자치구 분석"}
+                </button>
+              ))}
+            </div>
+            {/* Year selector — shared between both tabs */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1]">기준 년도</span>
+              <div className="flex gap-1.5">
+                {AVAILABLE_YEARS.map(y => (
+                  <button
+                    key={y}
+                    onClick={() => setSelectedYear(y)}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                      selectedYear === y
+                        ? "border-[#3182F6] bg-[#3182F6] text-white"
+                        : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
+                    }`}
+                  >
+                    {y}년
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -238,21 +211,16 @@ function MarketPage() {
       {activeTab === "seoul" ? (
         <SeoulTab
           rawData={rawData}
-          availableYears={availableYears}
-          endYear={endYear} setEndYear={setEndYear}
-          endMonth={endMonth} setEndMonth={setEndMonth}
-          periodMonths={periodMonths} setPeriodMonths={setPeriodMonths}
+          selectedYear={selectedYear}
           onDistrictClick={(d) => { setDistrict(d); setActiveTab("district"); }}
         />
       ) : (
         <DistrictTab
           distData={distData ?? []}
           isLoading={distLoading}
-          district={district} setDistrict={setDistrict}
-          availableYears={availableYears}
-          endYear={endYear} setEndYear={setEndYear}
-          endMonth={endMonth} setEndMonth={setEndMonth}
-          periodMonths={periodMonths} setPeriodMonths={setPeriodMonths}
+          district={district}
+          setDistrict={setDistrict}
+          selectedYear={selectedYear}
         />
       )}
     </div>
@@ -261,22 +229,33 @@ function MarketPage() {
 
 // ─── Seoul Tab ───────────────────────────────────────────────────────────────
 
-function SeoulTab({
-  rawData, availableYears,
-  endYear, setEndYear, endMonth, setEndMonth, periodMonths, setPeriodMonths,
-  onDistrictClick,
-}: {
+function SeoulTab({ rawData, selectedYear, onDistrictClick }: {
   rawData: AptSummary[];
-  availableYears: number[];
-  endYear: number; setEndYear: (v: number) => void;
-  endMonth: number; setEndMonth: (v: number) => void;
-  periodMonths: number; setPeriodMonths: (v: number) => void;
+  selectedYear: number;
   onDistrictClick: (district: string) => void;
 }) {
-  // District stats
+  const curData = useMemo(() => rawData.filter(p => p.contract_year === selectedYear), [rawData, selectedYear]);
+  const prevData = useMemo(() => rawData.filter(p => p.contract_year === selectedYear - 1), [rawData, selectedYear]);
+  const prevYearLabel = selectedYear - 1;
+
+  // 12-month chart data with YoY and MA3
+  const chartData = useMemo(() => {
+    const rows = Array.from({ length: 12 }, (_, i) => {
+      const month = i + 1;
+      const cur = curData.filter(p => p.contract_month === month && p.price_man_won).map(p => p.price_man_won!);
+      const prev = prevData.filter(p => p.contract_month === month && p.price_man_won).map(p => p.price_man_won!);
+      const avg = cur.length ? Math.round(cur.reduce((s, v) => s + v, 0) / cur.length) : null;
+      const prevAvg = prev.length ? Math.round(prev.reduce((s, v) => s + v, 0) / prev.length) : null;
+      return { month: `${month}월`, avgPrice: avg, prevYearPrice: prevAvg, count: cur.length || null };
+    });
+    const ma3 = movingAvg(rows.map(r => r.avgPrice), 3);
+    return rows.map((r, i) => ({ ...r, ma3: ma3[i] }));
+  }, [curData, prevData]);
+
+  // District stats (current year)
   const districtStats = useMemo(() => {
     const grouped: Record<string, number[]> = {};
-    for (const p of rawData) {
+    for (const p of curData) {
       const k = p.sigun_gu ?? "기타";
       if (!grouped[k]) grouped[k] = [];
       if (p.price_man_won) grouped[k].push(p.price_man_won);
@@ -289,152 +268,137 @@ function SeoulTab({
       })
       .filter((x): x is NonNullable<typeof x> => x !== null)
       .sort((a, b) => b.mean - a.mean);
-  }, [rawData]);
+  }, [curData]);
 
-  // Monthly trend — filtered to period
-  const monthlyTrend = useMemo(() => {
-    const months = buildMonths(endYear, endMonth, periodMonths);
-    const byMonth: Record<string, number[]> = {};
-    for (const m of months) byMonth[m] = [];
-    for (const p of rawData) {
-      if (p.contract_year && p.contract_month && p.price_man_won) {
-        const key = ymKey(p.contract_year, p.contract_month);
-        if (byMonth[key] !== undefined) byMonth[key].push(p.price_man_won);
-      }
-    }
-    const means = months.map(m => {
-      const prices = byMonth[m];
-      return prices.length ? Math.round(prices.reduce((s, v) => s + v, 0) / prices.length) : null;
-    });
-    const ma3 = movingAvg(means, 3);
-    const ma6 = movingAvg(means, 6);
-    return months.map((m, i) => ({
-      month: m.slice(2), avgPrice: means[i], count: byMonth[m].length || null, ma3: ma3[i], ma6: ma6[i],
-    }));
-  }, [rawData, endYear, endMonth, periodMonths]);
-
-  // Price distribution — filtered to period
+  // Price distribution (current year)
   const priceDistribution = useMemo(() => {
-    const months = new Set(buildMonths(endYear, endMonth, periodMonths));
-    const prices = rawData
-      .filter(p => p.contract_year && p.contract_month && months.has(ymKey(p.contract_year, p.contract_month)))
-      .map(p => p.price_man_won)
-      .filter((p): p is number => p !== null);
+    const prices = curData.map(p => p.price_man_won).filter((p): p is number => p !== null);
     const total = prices.length;
     if (!total) return [];
     return PRICE_BUCKETS.map(b => {
       const count = prices.filter(p => p >= b.min && p < b.max).length;
       return { label: b.label, count, pct: Math.round((count / total) * 100) };
     }).filter(b => b.count > 0);
-  }, [rawData, endYear, endMonth, periodMonths]);
+  }, [curData]);
 
-  // Overview KPI
-  const overviewStats = useMemo(() => {
-    const months = new Set(buildMonths(endYear, endMonth, periodMonths));
-    const prices = rawData
-      .filter(p => p.contract_year && p.contract_month && months.has(ymKey(p.contract_year, p.contract_month)))
-      .map(p => p.price_man_won)
-      .filter((p): p is number => p !== null);
-    return calcStats(prices);
-  }, [rawData, endYear, endMonth, periodMonths]);
+  // KPI
+  const stats = useMemo(() =>
+    calcStats(curData.map(p => p.price_man_won).filter((p): p is number => p !== null)),
+  [curData]);
 
-  // Momentum
+  // YoY change
+  const yoyChange = useMemo(() => {
+    const prevPrices = prevData.map(p => p.price_man_won).filter((p): p is number => p !== null);
+    if (!stats || !prevPrices.length) return null;
+    const prevMean = prevPrices.reduce((s, v) => s + v, 0) / prevPrices.length;
+    return Math.round(((stats.mean - prevMean) / prevMean) * 1000) / 10;
+  }, [stats, prevData]);
+
+  // Momentum: last 2 months with data in current year, MoM by district
   const momentum = useMemo(() => {
-    const sorted = [...rawData]
-      .filter(p => p.contract_year && p.contract_month)
-      .sort((a, b) => {
-        const ka = ymKey(a.contract_year!, a.contract_month!);
-        const kb = ymKey(b.contract_year!, b.contract_month!);
-        return kb.localeCompare(ka);
-      });
-    const latestKey = sorted[0] ? ymKey(sorted[0].contract_year!, sorted[0].contract_month!) : null;
-    if (!latestKey) return [];
-    const [ly, lm] = latestKey.split("-").map(Number);
-    const prevDate = new Date(ly, lm - 2, 1);
-    const prevKey = ymKey(prevDate.getFullYear(), prevDate.getMonth() + 1);
-    const byDistrict: Record<string, { latest: number[]; prev: number[] }> = {};
-    for (const p of rawData) {
-      if (!p.sigun_gu || !p.price_man_won || !p.contract_year || !p.contract_month) continue;
-      const key = ymKey(p.contract_year, p.contract_month);
-      if (!byDistrict[p.sigun_gu]) byDistrict[p.sigun_gu] = { latest: [], prev: [] };
-      if (key === latestKey) byDistrict[p.sigun_gu].latest.push(p.price_man_won);
-      if (key === prevKey) byDistrict[p.sigun_gu].prev.push(p.price_man_won);
+    const withData: { month: number; byDist: Record<string, number> }[] = [];
+    for (let m = 12; m >= 1 && withData.length < 2; m--) {
+      const mData = curData.filter(p => p.contract_month === m && p.sigun_gu && p.price_man_won);
+      if (mData.length > 0) {
+        const byDist: Record<string, number[]> = {};
+        for (const p of mData) {
+          if (!byDist[p.sigun_gu!]) byDist[p.sigun_gu!] = [];
+          byDist[p.sigun_gu!].push(p.price_man_won!);
+        }
+        withData.push({
+          month: m,
+          byDist: Object.fromEntries(
+            Object.entries(byDist).map(([d, ps]) => [d, Math.round(ps.reduce((s, v) => s + v, 0) / ps.length)])
+          ),
+        });
+      }
     }
-    return Object.entries(byDistrict)
-      .map(([district, { latest, prev }]) => {
-        if (!latest.length || !prev.length) return null;
-        const latestMean = latest.reduce((s, v) => s + v, 0) / latest.length;
-        const prevMean = prev.reduce((s, v) => s + v, 0) / prev.length;
-        const changePct = ((latestMean - prevMean) / prevMean) * 100;
-        return { district, changePct: Math.round(changePct * 10) / 10, latestMean: Math.round(latestMean) };
-      })
-      .filter((x): x is NonNullable<typeof x> => x !== null)
+    if (withData.length < 2) return [];
+    const [latest, prev] = withData;
+    return Object.keys(latest.byDist)
+      .filter(d => prev.byDist[d])
+      .map(d => ({
+        district: d,
+        changePct: Math.round(((latest.byDist[d] - prev.byDist[d]) / prev.byDist[d]) * 1000) / 10,
+        latestMean: latest.byDist[d],
+      }))
       .sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct))
       .slice(0, 6);
-  }, [rawData]);
+  }, [curData]);
 
   const globalMaxUpper = districtStats[0]?.upper ?? 1;
 
   return (
     <div className="mx-auto max-w-7xl space-y-8 px-5 py-8">
-      {/* Controls */}
-      <div className="card p-5 flex flex-wrap items-center gap-4">
-        <FilterSelect label="기준 년도" value={String(endYear)} onChange={v => setEndYear(Number(v))}>
-          {availableYears.map(y => <option key={y}>{y}</option>)}
-        </FilterSelect>
-        <FilterSelect label="기준 월" value={String(endMonth)} onChange={v => setEndMonth(Number(v))}>
-          {Array.from({ length: 12 }, (_, i) => i + 1).map(m => (
-            <option key={m} value={m}>{m}월</option>
-          ))}
-        </FilterSelect>
-        <FilterSelect label="조회 기간" value={String(periodMonths)} onChange={v => setPeriodMonths(Number(v))}>
-          {[6, 12, 24, 36].map(m => <option key={m} value={m}>{m}개월</option>)}
-        </FilterSelect>
-      </div>
-
       {/* KPI */}
-      {overviewStats && (
+      {stats && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="서울 평균 거래가" value={fmtPrice(overviewStats.mean)} sub={`${overviewStats.count.toLocaleString()}건 기준`} />
-          <StatCard label="서울 중위 거래가" value={fmtPrice(overviewStats.median)} sub="이상치 영향 최소화" />
-          <StatCard label="총 거래량" value={overviewStats.count.toLocaleString()} sub="서울 25개 자치구 합산" />
-          <StatCard label="최고 거래가" value={fmtPrice(overviewStats.max)} sub="조회 기간 내 최고가" tone="accent" />
+          <StatCard label={`${selectedYear}년 평균 거래가`} value={fmtPrice(stats.mean)} sub={`${stats.count.toLocaleString()}건 기준`} />
+          <StatCard label="중위 거래가" value={fmtPrice(stats.median)} sub="이상치 영향 최소화" />
+          <StatCard label="총 거래량" value={stats.count.toLocaleString()} sub="서울 25개 자치구 합산" />
+          {yoyChange !== null ? (
+            <StatCard
+              label={`전년(${prevYearLabel}년) 대비`}
+              value={`${yoyChange > 0 ? "+" : ""}${yoyChange}%`}
+              sub={`${prevYearLabel}년 평균가 대비`}
+              tone={yoyChange > 0 ? "up" : yoyChange < 0 ? "down" : "neutral"}
+            />
+          ) : (
+            <StatCard label="최고 거래가" value={fmtPrice(stats.max)} sub="데이터 내 최고가" tone="accent" />
+          )}
         </div>
       )}
 
       {/* Monthly Trend */}
-      <Section title="서울 월별 평균 거래가" subtitle="서울 전체 · MA3(단기) · MA6(중기) 이동평균 포함" icon={<Activity className="h-5 w-5 text-[#3182F6]" />}>
+      <Section
+        title={`${selectedYear}년 서울 월별 평균 거래가`}
+        subtitle={`${prevYearLabel}년 동월 비교 · MA3 단기 추세선 포함`}
+        icon={<Activity className="h-5 w-5 text-[#3182F6]" />}
+      >
         <div className="h-80">
           <ResponsiveContainer>
-            <ComposedChart data={monthlyTrend} margin={{ top: 10, right: 16, bottom: 0, left: 10 }}>
+            <ComposedChart data={chartData} margin={{ top: 10, right: 16, bottom: 0, left: 10 }}>
+              <defs>
+                <linearGradient id="seoulGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#3182F6" stopOpacity={0.2} />
+                  <stop offset="95%" stopColor="#3182F6" stopOpacity={0} />
+                </linearGradient>
+              </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EB" />
               <XAxis dataKey="month" stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} />
               <YAxis yAxisId="price" orientation="left" stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} tickFormatter={v => `${(v / 10000).toFixed(0)}억`} width={52} />
-              <YAxis yAxisId="count" orientation="right" stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} tickFormatter={v => `${v}건`} width={44} />
+              <YAxis yAxisId="count" orientation="right" stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} tickFormatter={v => `${v}건`} width={48} />
               <Tooltip
                 contentStyle={{ borderRadius: 12, border: "1px solid #E5E8EB", fontSize: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.08)" }}
-                formatter={(value: number, name: string) => {
-                  if (name === "거래량") return [`${value?.toLocaleString() ?? 0}건`, name];
+                formatter={(value: number, name: string, props: any) => {
+                  if (name === "거래량") return [`${(value ?? 0).toLocaleString()}건`, name];
+                  if (name === `${selectedYear}년 평균가` && props.payload?.prevYearPrice) {
+                    const yoy = ((value - props.payload.prevYearPrice) / props.payload.prevYearPrice * 100).toFixed(1);
+                    return [`${fmtPrice(value)}  (전년비 ${Number(yoy) > 0 ? "+" : ""}${yoy}%)`, name];
+                  }
                   return [fmtPrice(value), name];
                 }}
               />
               <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
-              <Bar yAxisId="count" dataKey="count" name="거래량" fill="#BFDBFE" opacity={0.7} radius={[3, 3, 0, 0]} />
-              <Line yAxisId="price" type="monotone" dataKey="avgPrice" name="평균 거래가" stroke="#191F28" strokeWidth={2.5} dot={false} connectNulls />
-              <Line yAxisId="price" type="monotone" dataKey="ma3" name="MA3 단기" stroke="#3182F6" strokeWidth={2} strokeDasharray="7 3" dot={false} connectNulls />
-              <Line yAxisId="price" type="monotone" dataKey="ma6" name="MA6 중기" stroke="#F04452" strokeWidth={2} strokeDasharray="3 5" dot={false} connectNulls />
+              <Bar yAxisId="count" dataKey="count" name="거래량" fill="#DBEAFE" radius={[3, 3, 0, 0]} />
+              <Area yAxisId="price" type="monotone" dataKey="avgPrice" name={`${selectedYear}년 평균가`} stroke="#3182F6" fill="url(#seoulGrad)" strokeWidth={2.5} dot={false} connectNulls />
+              <Line yAxisId="price" type="monotone" dataKey="prevYearPrice" name={`${prevYearLabel}년 평균가`} stroke="#9CA3AF" strokeWidth={1.5} strokeDasharray="5 4" dot={false} connectNulls />
+              <Line yAxisId="price" type="monotone" dataKey="ma3" name="MA3(3개월)" stroke="#F59E0B" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
-        <div className="mt-4 rounded-xl bg-[#F2F4F6] px-4 py-3">
-          <p className="text-xs leading-relaxed text-[#8B95A1]">
-            <strong className="text-[#191F28]">MA3(단기)</strong>: 최근 3개월 이동평균 · <strong className="text-[#191F28]">MA6(중기)</strong>: 6개월 이동평균. 평균가가 MA6 위이면 상승 흐름, 아래이면 하락 흐름.
-          </p>
+        <div className="mt-4 rounded-xl bg-[#F8FAFC] border border-[#E5E8EB] px-4 py-3 text-xs text-[#8B95A1] leading-relaxed">
+          <strong className="text-[#191F28]">MA3(3개월 이동평균)</strong>: 최근 3개월 평균가의 평균 — 노이즈를 제거한 단기 추세선. 실제 평균가가 MA3 위면 상승, 아래면 하락 흐름.
+          &nbsp;|&nbsp; <strong className="text-[#191F28]">전년 동월 비교</strong>: {prevYearLabel}년 같은 달 평균가와 직접 비교.
         </div>
       </Section>
 
       {/* District Table */}
-      <Section title="자치구별 시세 비교" subtitle="평균가 기준 내림차순 · 행 클릭 시 자치구 상세 분석" icon={<BarChart2 className="h-5 w-5 text-[#3182F6]" />}>
+      <Section
+        title={`${selectedYear}년 자치구별 시세 비교`}
+        subtitle="평균가 기준 내림차순 · 행 클릭 시 자치구 상세 분석"
+        icon={<BarChart2 className="h-5 w-5 text-[#3182F6]" />}
+      >
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -483,7 +447,11 @@ function SeoulTab({
       </Section>
 
       {/* Price Distribution */}
-      <Section title="서울 가격대 분포" subtitle="조회 기간 내 실거래 가격 구간별 건수" icon={<BarChart2 className="h-5 w-5 text-[#3182F6]" />}>
+      <Section
+        title={`${selectedYear}년 서울 가격대 분포`}
+        subtitle="실거래 가격 구간별 건수"
+        icon={<BarChart2 className="h-5 w-5 text-[#3182F6]" />}
+      >
         <div className="h-64">
           <ResponsiveContainer>
             <BarChart data={priceDistribution} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
@@ -492,8 +460,8 @@ function SeoulTab({
               <YAxis stroke="#8B95A1" fontSize={12} tick={{ fill: "#8B95A1" }} tickFormatter={v => `${v}건`} width={52} />
               <Tooltip
                 contentStyle={{ borderRadius: 12, border: "1px solid #E5E8EB", fontSize: 12 }}
-                formatter={(value: number, _: string, { payload }: any) => [
-                  `${value.toLocaleString()}건 · 전체의 ${payload.pct}%`, "거래건수",
+                formatter={(value: number, _: string, props: any) => [
+                  `${value.toLocaleString()}건 · 전체의 ${props.payload?.pct}%`, "거래건수",
                 ]}
               />
               <Bar dataKey="count" radius={[6, 6, 0, 0]}>
@@ -516,7 +484,11 @@ function SeoulTab({
 
       {/* Momentum */}
       {momentum.length > 0 && (
-        <Section title="구별 최근 거래가 변동" subtitle="직전 월 대비 평균 거래가 등락률 · 클릭 시 자치구 분석" icon={<TrendingUp className="h-5 w-5 text-[#3182F6]" />}>
+        <Section
+          title="구별 전월 대비 변동"
+          subtitle={`${selectedYear}년 최근 두 달 평균가 등락 · 클릭 시 자치구 분석`}
+          icon={<TrendingUp className="h-5 w-5 text-[#3182F6]" />}
+        >
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {momentum.map((m) => {
               const up = m.changePct > 0;
@@ -544,56 +516,48 @@ function SeoulTab({
 
 // ─── District Tab ─────────────────────────────────────────────────────────────
 
-function DistrictTab({
-  distData, isLoading, district, setDistrict,
-  availableYears, endYear, setEndYear, endMonth, setEndMonth, periodMonths, setPeriodMonths,
-}: {
+function DistrictTab({ distData, isLoading, district, setDistrict, selectedYear }: {
   distData: AptDetail[];
   isLoading: boolean;
-  district: string; setDistrict: (v: string) => void;
-  availableYears: number[];
-  endYear: number; setEndYear: (v: number) => void;
-  endMonth: number; setEndMonth: (v: number) => void;
-  periodMonths: number; setPeriodMonths: (v: number) => void;
+  district: string;
+  setDistrict: (v: string) => void;
+  selectedYear: number;
 }) {
-  // Monthly trend
-  const monthlyTrend = useMemo(() => {
-    const months = buildMonths(endYear, endMonth, periodMonths);
-    const byMonth: Record<string, number[]> = {};
-    for (const m of months) byMonth[m] = [];
-    for (const p of distData) {
-      if (p.contract_year && p.contract_month && p.price_man_won) {
-        const key = ymKey(p.contract_year, p.contract_month);
-        if (byMonth[key] !== undefined) byMonth[key].push(p.price_man_won);
-      }
-    }
-    const means = months.map(m => {
-      const prices = byMonth[m];
-      return prices.length ? Math.round(prices.reduce((s, v) => s + v, 0) / prices.length) : null;
+  const curData = useMemo(() => distData.filter(p => p.contract_year === selectedYear), [distData, selectedYear]);
+  const prevData = useMemo(() => distData.filter(p => p.contract_year === selectedYear - 1), [distData, selectedYear]);
+  const prevYearLabel = selectedYear - 1;
+
+  // 12-month chart data with YoY and MA3
+  const chartData = useMemo(() => {
+    const rows = Array.from({ length: 12 }, (_, i) => {
+      const month = i + 1;
+      const cur = curData.filter(p => p.contract_month === month && p.price_man_won).map(p => p.price_man_won!);
+      const prev = prevData.filter(p => p.contract_month === month && p.price_man_won).map(p => p.price_man_won!);
+      const avg = cur.length ? Math.round(cur.reduce((s, v) => s + v, 0) / cur.length) : null;
+      const prevAvg = prev.length ? Math.round(prev.reduce((s, v) => s + v, 0) / prev.length) : null;
+      return { month: `${month}월`, avgPrice: avg, prevYearPrice: prevAvg, count: cur.length || null };
     });
-    const ma3 = movingAvg(means, 3);
-    return months.map((m, i) => ({
-      month: m.slice(2), avgPrice: means[i], count: byMonth[m].length || null, ma3: ma3[i],
-    }));
-  }, [distData, endYear, endMonth, periodMonths]);
+    const ma3 = movingAvg(rows.map(r => r.avgPrice), 3);
+    return rows.map((r, i) => ({ ...r, ma3: ma3[i] }));
+  }, [curData, prevData]);
 
   // Price distribution
   const priceDistribution = useMemo(() => {
-    const prices = distData.map(p => p.price_man_won).filter((p): p is number => p !== null);
+    const prices = curData.map(p => p.price_man_won).filter((p): p is number => p !== null);
     const total = prices.length;
     if (!total) return [];
     return PRICE_BUCKETS.map(b => {
       const count = prices.filter(p => p >= b.min && p < b.max).length;
       return { label: b.label, count, pct: Math.round((count / total) * 100) };
     }).filter(b => b.count > 0);
-  }, [distData]);
+  }, [curData]);
 
   // Floor analysis
   const floorAnalysis = useMemo(() => {
     const groups: Record<string, number[]> = {
       "저층(1-5)": [], "중저층(6-10)": [], "중층(11-15)": [], "중고층(16-20)": [], "고층(21+)": [],
     };
-    for (const p of distData) {
+    for (const p of curData) {
       if (!p.floor || !p.price_man_won) continue;
       const f = p.floor;
       if (f <= 5) groups["저층(1-5)"].push(p.price_man_won);
@@ -608,12 +572,12 @@ function DistrictTab({
         return { label, avg: Math.round(prices.reduce((s, v) => s + v, 0) / prices.length), count: prices.length };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
-  }, [distData]);
+  }, [curData]);
 
   // Top apartments
   const topApts = useMemo(() => {
     const counts: Record<string, { count: number; prices: number[] }> = {};
-    for (const p of distData) {
+    for (const p of curData) {
       const name = p.apt_name ?? "미상";
       if (!counts[name]) counts[name] = { count: 0, prices: [] };
       counts[name].count++;
@@ -627,12 +591,11 @@ function DistrictTab({
       }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 10);
-  }, [distData]);
+  }, [curData]);
 
   // KPI
   const kpi = useMemo(() => {
-    if (!distData.length) return null;
-    const prices = distData.map(p => p.price_man_won).filter((p): p is number => p !== null);
+    const prices = curData.map(p => p.price_man_won).filter((p): p is number => p !== null);
     if (!prices.length) return null;
     const avg = Math.round(prices.reduce((s, v) => s + v, 0) / prices.length);
     const sorted = [...prices].sort((a, b) => a - b);
@@ -640,34 +603,33 @@ function DistrictTab({
       ? Math.round((sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2)
       : sorted[Math.floor(sorted.length / 2)];
     return { avg, median, max: Math.max(...prices), count: prices.length };
-  }, [distData]);
+  }, [curData]);
 
-  const momChange = useMemo(() => {
-    const recent = monthlyTrend.filter(m => m.avgPrice !== null);
-    if (recent.length < 2) return null;
-    const last = recent[recent.length - 1].avgPrice!;
-    const prev = recent[recent.length - 2].avgPrice!;
-    return Math.round(((last - prev) / prev) * 1000) / 10;
-  }, [monthlyTrend]);
+  // YoY change
+  const yoyChange = useMemo(() => {
+    const prevPrices = prevData.map(p => p.price_man_won).filter((p): p is number => p !== null);
+    if (!kpi || !prevPrices.length) return null;
+    const prevMean = prevPrices.reduce((s, v) => s + v, 0) / prevPrices.length;
+    return Math.round(((kpi.avg - prevMean) / prevMean) * 1000) / 10;
+  }, [kpi, prevData]);
 
   return (
     <div className="mx-auto max-w-7xl space-y-8 px-5 py-8">
-      {/* Controls */}
-      <div className="card p-5 flex flex-wrap items-center gap-4">
-        <FilterSelect label="자치구" value={district} onChange={setDistrict}>
-          {SEOUL_DISTRICTS.map(d => <option key={d}>{d}</option>)}
-        </FilterSelect>
-        <FilterSelect label="기준 년도" value={String(endYear)} onChange={v => setEndYear(Number(v))}>
-          {availableYears.map(y => <option key={y}>{y}</option>)}
-        </FilterSelect>
-        <FilterSelect label="기준 월" value={String(endMonth)} onChange={v => setEndMonth(Number(v))}>
-          {Array.from({ length: 12 }, (_, i) => i + 1).map(m => (
-            <option key={m} value={m}>{m}월</option>
+      {/* District selector */}
+      <div className="card p-5">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">자치구</h3>
+        <div className="flex flex-wrap gap-1.5">
+          {SEOUL_DISTRICTS.map(d => (
+            <button key={d} onClick={() => setDistrict(d)}
+              className={`rounded-lg border px-2.5 py-1 text-xs transition ${
+                district === d
+                  ? "border-[#3182F6] bg-[#3182F6] text-white"
+                  : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"
+              }`}>
+              {d}
+            </button>
           ))}
-        </FilterSelect>
-        <FilterSelect label="조회 기간" value={String(periodMonths)} onChange={v => setPeriodMonths(Number(v))}>
-          {[6, 12, 24, 36].map(m => <option key={m} value={m}>{m}개월</option>)}
-        </FilterSelect>
+        </div>
       </div>
 
       {isLoading ? (
@@ -677,15 +639,15 @@ function DistrictTab({
           {/* KPI */}
           {kpi ? (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard label="평균 거래가" value={fmtPrice(kpi.avg)} sub={`${kpi.count.toLocaleString()}건 기준`} />
+              <StatCard label={`${selectedYear}년 평균 거래가`} value={fmtPrice(kpi.avg)} sub={`${kpi.count.toLocaleString()}건 기준`} />
               <StatCard label="중위 거래가" value={fmtPrice(kpi.median)} sub="이상치 영향 최소화" />
-              <StatCard label="거래량" value={kpi.count.toLocaleString()} sub={`${district} 전체`} />
-              {momChange !== null ? (
+              <StatCard label="거래량" value={kpi.count.toLocaleString()} sub={`${district} ${selectedYear}년`} />
+              {yoyChange !== null ? (
                 <StatCard
-                  label="전월 대비"
-                  value={`${momChange > 0 ? "+" : ""}${momChange}%`}
-                  sub="최근 2개월 평균가 비교"
-                  tone={momChange > 0 ? "up" : momChange < 0 ? "down" : "neutral"}
+                  label={`전년(${prevYearLabel}년) 대비`}
+                  value={`${yoyChange > 0 ? "+" : ""}${yoyChange}%`}
+                  sub={`${prevYearLabel}년 평균가 대비`}
+                  tone={yoyChange > 0 ? "up" : yoyChange < 0 ? "down" : "neutral"}
                 />
               ) : (
                 <StatCard label="최고 거래가" value={fmtPrice(kpi.max)} sub="데이터 내 최고가" tone="accent" />
@@ -693,38 +655,57 @@ function DistrictTab({
             </div>
           ) : (
             <div className="card p-8 text-center text-[#8B95A1]">
-              {district} 데이터가 없습니다. 다른 자치구를 선택해 주세요.
+              {district} {selectedYear}년 데이터가 없습니다.
             </div>
           )}
 
           {/* Monthly Trend */}
-          <Section title={`${district} 월별 평균 거래가`} subtitle="MA3 단기 이동평균 포함" icon={<Activity className="h-5 w-5 text-[#3182F6]" />}>
+          <Section
+            title={`${district} ${selectedYear}년 월별 평균 거래가`}
+            subtitle={`${prevYearLabel}년 동월 비교 · MA3 단기 추세선`}
+            icon={<Activity className="h-5 w-5 text-[#3182F6]" />}
+          >
             <div className="h-80">
               <ResponsiveContainer>
-                <ComposedChart data={monthlyTrend} margin={{ top: 10, right: 16, bottom: 0, left: 10 }}>
+                <ComposedChart data={chartData} margin={{ top: 10, right: 16, bottom: 0, left: 10 }}>
+                  <defs>
+                    <linearGradient id="distGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3182F6" stopOpacity={0.2} />
+                      <stop offset="95%" stopColor="#3182F6" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EB" />
                   <XAxis dataKey="month" stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} />
                   <YAxis yAxisId="price" orientation="left" stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} tickFormatter={v => `${(v / 10000).toFixed(0)}억`} width={52} />
-                  <YAxis yAxisId="count" orientation="right" stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} tickFormatter={v => `${v}건`} width={44} />
+                  <YAxis yAxisId="count" orientation="right" stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} tickFormatter={v => `${v}건`} width={48} />
                   <Tooltip
                     contentStyle={{ borderRadius: 12, border: "1px solid #E5E8EB", fontSize: 12 }}
-                    formatter={(value: number, name: string) => {
-                      if (name === "거래량") return [`${value?.toLocaleString() ?? 0}건`, name];
+                    formatter={(value: number, name: string, props: any) => {
+                      if (name === "거래량") return [`${(value ?? 0).toLocaleString()}건`, name];
+                      if (name === `${selectedYear}년 평균가` && props.payload?.prevYearPrice) {
+                        const yoy = ((value - props.payload.prevYearPrice) / props.payload.prevYearPrice * 100).toFixed(1);
+                        return [`${fmtPrice(value)}  (전년비 ${Number(yoy) > 0 ? "+" : ""}${yoy}%)`, name];
+                      }
                       return [fmtPrice(value), name];
                     }}
                   />
                   <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
-                  <Bar yAxisId="count" dataKey="count" name="거래량" fill="#BFDBFE" opacity={0.7} radius={[3, 3, 0, 0]} />
-                  <Line yAxisId="price" type="monotone" dataKey="avgPrice" name="평균 거래가" stroke="#191F28" strokeWidth={2.5} dot={false} connectNulls />
-                  <Line yAxisId="price" type="monotone" dataKey="ma3" name="MA3 단기" stroke="#3182F6" strokeWidth={2} strokeDasharray="7 3" dot={false} connectNulls />
+                  <Bar yAxisId="count" dataKey="count" name="거래량" fill="#DBEAFE" radius={[3, 3, 0, 0]} />
+                  <Area yAxisId="price" type="monotone" dataKey="avgPrice" name={`${selectedYear}년 평균가`} stroke="#3182F6" fill="url(#distGrad)" strokeWidth={2.5} dot={false} connectNulls />
+                  <Line yAxisId="price" type="monotone" dataKey="prevYearPrice" name={`${prevYearLabel}년 평균가`} stroke="#9CA3AF" strokeWidth={1.5} strokeDasharray="5 4" dot={false} connectNulls />
+                  <Line yAxisId="price" type="monotone" dataKey="ma3" name="MA3(3개월)" stroke="#F59E0B" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
+            <div className="mt-4 rounded-xl bg-[#F8FAFC] border border-[#E5E8EB] px-4 py-3 text-xs text-[#8B95A1] leading-relaxed">
+              <strong className="text-[#191F28]">MA3(3개월 이동평균)</strong>: 단기 추세선 — 평균가가 MA3 위면 상승, 아래면 하락 흐름.
+              &nbsp;|&nbsp; <strong className="text-[#191F28]">전년 동월 비교</strong>: {prevYearLabel}년 동월 평균가와 직접 비교.
+            </div>
           </Section>
 
-          {/* Price Dist + Floor side by side */}
+          {/* Price Dist + Floor */}
           <div className="grid gap-6 lg:grid-cols-2">
-            <Section title="가격대 분포" subtitle={`${district} 실거래 건수 비중`} icon={<BarChart2 className="h-5 w-5 text-[#3182F6]" />}>
+            <Section title="가격대 분포" subtitle={`${district} ${selectedYear}년 실거래 건수 비중`} icon={<BarChart2 className="h-5 w-5 text-[#3182F6]" />}>
               <div className="h-64">
                 <ResponsiveContainer>
                   <BarChart data={priceDistribution} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
@@ -733,8 +714,8 @@ function DistrictTab({
                     <YAxis stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} tickFormatter={v => `${v}건`} width={44} />
                     <Tooltip
                       contentStyle={{ borderRadius: 12, border: "1px solid #E5E8EB", fontSize: 12 }}
-                      formatter={(value: number, _: string, { payload }: any) => [
-                        `${value.toLocaleString()}건 · ${payload.pct}%`, "거래건수",
+                      formatter={(value: number, _: string, props: any) => [
+                        `${value.toLocaleString()}건 · ${props.payload?.pct}%`, "거래건수",
                       ]}
                     />
                     <Bar dataKey="count" radius={[6, 6, 0, 0]}>
@@ -747,7 +728,7 @@ function DistrictTab({
               </div>
             </Section>
 
-            <Section title="층별 평균 거래가" subtitle={`${district} 층 구간별 평균 실거래가`} icon={<TrendingUp className="h-5 w-5 text-[#3182F6]" />}>
+            <Section title="층별 평균 거래가" subtitle={`${district} ${selectedYear}년 층 구간별`} icon={<TrendingUp className="h-5 w-5 text-[#3182F6]" />}>
               <div className="h-64">
                 <ResponsiveContainer>
                   <BarChart data={floorAnalysis} layout="vertical" margin={{ top: 5, right: 60, bottom: 5, left: 10 }}>
@@ -756,8 +737,8 @@ function DistrictTab({
                     <YAxis type="category" dataKey="label" stroke="#8B95A1" fontSize={10} tick={{ fill: "#8B95A1" }} width={84} />
                     <Tooltip
                       contentStyle={{ borderRadius: 12, border: "1px solid #E5E8EB", fontSize: 12 }}
-                      formatter={(value: number, _: string, { payload }: any) => [
-                        `${fmtPrice(value)} · ${payload.count.toLocaleString()}건`, "평균 거래가",
+                      formatter={(value: number, _: string, props: any) => [
+                        `${fmtPrice(value)} · ${props.payload?.count?.toLocaleString()}건`, "평균 거래가",
                       ]}
                     />
                     <Bar dataKey="avg" radius={[0, 6, 6, 0]} fill="#3182F6" />
@@ -769,7 +750,7 @@ function DistrictTab({
 
           {/* Top Apartments */}
           {topApts.length > 0 && (
-            <Section title={`${district} 주요 거래 단지 TOP 10`} subtitle="거래 건수 기준" icon={<Home className="h-5 w-5 text-[#3182F6]" />}>
+            <Section title={`${district} ${selectedYear}년 주요 거래 단지 TOP 10`} subtitle="거래 건수 기준" icon={<Home className="h-5 w-5 text-[#3182F6]" />}>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -803,23 +784,6 @@ function DistrictTab({
 }
 
 // ─── Shared UI ────────────────────────────────────────────────────────────────
-
-function FilterSelect({ label, value, onChange, children }: {
-  label: string; value: string; onChange: (v: string) => void; children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <label className="whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-[#8B95A1]">{label}</label>
-      <select
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        className="rounded-lg border border-[#E5E8EB] bg-white px-3 py-1.5 text-sm text-[#191F28] transition focus:outline-none focus:ring-2 focus:ring-[#3182F6]/40"
-      >
-        {children}
-      </select>
-    </div>
-  );
-}
 
 function StatCard({ label, value, sub, tone }: {
   label: string; value: string; sub?: string; tone?: "accent" | "up" | "down" | "neutral";
