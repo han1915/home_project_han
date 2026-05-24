@@ -356,7 +356,7 @@ function SeoulTab({ selectedYear, yearlySeoul, monthlySeoulCur, monthlySeoulPrev
       </Section>
 
       {/* Monthly trend */}
-      <Section title={`${selectedYear}년 서울 월별 거래가 추이`} subtitle={`${prevYearLabel}년 동월 비교`}
+      <Section title={`${selectedYear}년 서울 월별 거래가 추이`} subtitle={selectedYear > 2022 ? `${prevYearLabel}년 동월 비교` : "월별 평균 거래가 · 거래량"}
         icon={<Activity className="h-5 w-5 text-[#3182F6]" />}>
         <div className="h-80">
           <ResponsiveContainer>
@@ -385,7 +385,9 @@ function SeoulTab({ selectedYear, yearlySeoul, monthlySeoulCur, monthlySeoulPrev
               <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
               <Bar yAxisId="count" dataKey="count" name="거래량" fill="#DBEAFE" radius={[3, 3, 0, 0]} />
               <Area yAxisId="price" type="monotone" dataKey="avgPrice" name={`${selectedYear}년 평균가`} stroke="#3182F6" fill="url(#seoulGrad)" strokeWidth={2.5} dot={{ r: 3, fill: "#3182F6" }} connectNulls />
-              <Line yAxisId="price" type="monotone" dataKey="prevPrice" name={`${prevYearLabel}년 평균가`} stroke="#9CA3AF" strokeWidth={1.5} strokeDasharray="5 4" dot={false} connectNulls />
+              {selectedYear > 2022 && (
+                <Line yAxisId="price" type="monotone" dataKey="prevPrice" name={`${prevYearLabel}년 평균가`} stroke="#9CA3AF" strokeWidth={1.5} strokeDasharray="5 4" dot={false} connectNulls />
+              )}
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -561,7 +563,7 @@ function DistrictTab({ selectedYear, district, setDistrict, yearlyDistrict, year
           </Section>
 
           {/* Monthly trend */}
-          <Section title={`${district} ${selectedYear}년 월별 거래가 추이`} subtitle={`${prevYearLabel}년 동월 비교`}
+          <Section title={`${district} ${selectedYear}년 월별 거래가 추이`} subtitle={selectedYear > 2022 ? `${prevYearLabel}년 동월 비교` : "월별 평균 거래가 · 거래량"}
             icon={<Activity className="h-5 w-5 text-[#3182F6]" />}>
             <div className="h-72">
               <ResponsiveContainer>
@@ -588,7 +590,9 @@ function DistrictTab({ selectedYear, district, setDistrict, yearlyDistrict, year
                   <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
                   <Bar yAxisId="count" dataKey="count" name="거래량" fill="#DBEAFE" radius={[3, 3, 0, 0]} />
                   <Area yAxisId="price" type="monotone" dataKey="avgPrice" name={`${selectedYear}년 평균가`} stroke="#3182F6" fill="url(#distGrad)" strokeWidth={2.5} dot={{ r: 3, fill: "#3182F6" }} connectNulls />
-                  <Line yAxisId="price" type="monotone" dataKey="prevPrice" name={`${prevYearLabel}년 평균가`} stroke="#9CA3AF" strokeWidth={1.5} strokeDasharray="5 4" dot={false} connectNulls />
+                  {selectedYear > 2022 && (
+                    <Line yAxisId="price" type="monotone" dataKey="prevPrice" name={`${prevYearLabel}년 평균가`} stroke="#9CA3AF" strokeWidth={1.5} strokeDasharray="5 4" dot={false} connectNulls />
+                  )}
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
