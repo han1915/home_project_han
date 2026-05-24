@@ -1,10 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
-import { Database, Loader2, CheckCircle2, AlertTriangle, ChevronDown } from "lucide-react";
+import { Database, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
+import { XMLParser } from "fast-xml-parser";
 import { SiteHeader } from "@/components/SiteHeader";
 import { Button } from "@/components/ui/button";
-import { ingestRealEstate } from "@/lib/ingest.functions";
+import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({
@@ -13,12 +13,38 @@ export const Route = createFileRoute("/admin")({
   component: AdminPage,
 });
 
-const DISTRICTS = [
-  "종로구","중구","용산구","성동구","광진구","동대문구","중랑구","성북구","강북구","도봉구",
-  "노원구","은평구","서대문구","마포구","양천구","강서구","구로구","금천구","영등포구","동작구",
-  "관악구","서초구","강남구","송파구","강동구",
+const BASE_URL =
+  "https://apis.data.go.kr/1613000/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade";
+
+const SEOUL_DISTRICTS = [
+  { code: "11110", name: "종로구" },
+  { code: "11140", name: "중구" },
+  { code: "11170", name: "용산구" },
+  { code: "11200", name: "성동구" },
+  { code: "11215", name: "광진구" },
+  { code: "11230", name: "동대문구" },
+  { code: "11260", name: "중랑구" },
+  { code: "11290", name: "성북구" },
+  { code: "11305", name: "강북구" },
+  { code: "11320", name: "도봉구" },
+  { code: "11350", name: "노원구" },
+  { code: "11380", name: "은평구" },
+  { code: "11410", name: "서대문구" },
+  { code: "11440", name: "마포구" },
+  { code: "11470", name: "양천구" },
+  { code: "11500", name: "강서구" },
+  { code: "11530", name: "구로구" },
+  { code: "11545", name: "금천구" },
+  { code: "11560", name: "영등포구" },
+  { code: "11590", name: "동작구" },
+  { code: "11620", name: "관악구" },
+  { code: "11650", name: "서초구" },
+  { code: "11680", name: "강남구" },
+  { code: "11710", name: "송파구" },
+  { code: "11740", name: "강동구" },
 ];
 
+const DISTRICT_NAMES = SEOUL_DISTRICTS.map((d) => d.name);
 const CURRENT_YEAR = new Date().getFullYear();
 const YEARS = Array.from({ length: CURRENT_YEAR - 2005 }, (_, i) => CURRENT_YEAR - i);
 const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
@@ -27,17 +53,35 @@ function pad(n: number) {
   return n < 10 ? `0${n}` : `${n}`;
 }
 
+function toNum(v: unknown): number | null {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(String(v).replace(/,/g, "").trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+type IngestResult = {
+  error: string | null;
+  inserted: number;
+  attempted: number;
+  apiCalls: number;
+  apiErrors: number;
+  months: string[];
+  durationMs: number;
+};
+
 function AdminPage() {
-  const ingest = useServerFn(ingestRealEstate);
   const [apiKey, setApiKey] = useState("");
   const [startYear, setStartYear] = useState(CURRENT_YEAR);
-  const [startMonth, setStartMonth] = useState(new Date().getMonth() - 1 < 1 ? 12 : new Date().getMonth() - 1);
+  const [startMonth, setStartMonth] = useState(
+    new Date().getMonth() < 1 ? 12 : new Date().getMonth(),
+  );
   const [endYear, setEndYear] = useState(CURRENT_YEAR);
   const [endMonth, setEndMonth] = useState(new Date().getMonth() + 1);
   const [selectedDistricts, setSelectedDistricts] = useState<string[]>([]);
   const [allDistricts, setAllDistricts] = useState(true);
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<Awaited<ReturnType<typeof ingestRealEstate>> | null>(null);
+  const [progress, setProgress] = useState("");
+  const [result, setResult] = useState<IngestResult | null>(null);
 
   const toggleDistrict = (d: string) => {
     setSelectedDistricts((prev) =>
@@ -46,26 +90,139 @@ function AdminPage() {
   };
 
   const run = async () => {
+    if (!apiKey.trim()) {
+      alert("공공데이터 포털 API 키를 입력해 주세요.");
+      return;
+    }
+
     setRunning(true);
     setResult(null);
+    setProgress("");
+
+    const start = Date.now();
+    const parser = new XMLParser({ ignoreAttributes: true });
+
+    // Build month list
+    const sy = startYear, sm = startMonth;
+    const ey = endYear, em = endMonth;
+    const months: string[] = [];
+    for (let y = sy; y <= ey; y++) {
+      const s = y === sy ? sm : 1;
+      const e = y === ey ? em : 12;
+      for (let m = s; m <= e; m++) months.push(`${y}${pad(m)}`);
+    }
+
+    const targets = allDistricts
+      ? SEOUL_DISTRICTS
+      : SEOUL_DISTRICTS.filter((d) => selectedDistricts.includes(d.name));
+
+    const totalSteps = months.length * targets.length;
+    let step = 0;
+    let apiCalls = 0;
+    let apiErrors = 0;
+    let attempted = 0;
+    let inserted = 0;
+
     try {
-      const res = await ingest({
-        data: {
-          apiKey: apiKey || undefined,
-          yearMonthStart: `${startYear}${pad(startMonth)}`,
-          yearMonthEnd: `${endYear}${pad(endMonth)}`,
-          districts: allDistricts ? undefined : selectedDistricts,
-        },
+      for (const month of months) {
+        for (const district of targets) {
+          step++;
+          setProgress(
+            `[${step}/${totalSteps}] ${district.name} ${month.slice(0, 4)}-${month.slice(4)} 조회 중...`,
+          );
+
+          const rows: object[] = [];
+          let pageNo = 1;
+
+          while (true) {
+            const url =
+              `${BASE_URL}?serviceKey=${encodeURIComponent(apiKey.trim())}` +
+              `&LAWD_CD=${district.code}&DEAL_YMD=${month}` +
+              `&numOfRows=100&pageNo=${pageNo}`;
+
+            try {
+              apiCalls++;
+              const res = await fetch(url);
+              if (!res.ok) break;
+              const xml = await res.text();
+              const parsed: any = parser.parse(xml);
+
+              // Check for API error response
+              const resultCode = parsed?.response?.header?.resultCode ?? parsed?.OpenAPI_ServiceResponse?.cmmMsgHeader?.returnReasonCode;
+              if (resultCode && String(resultCode) !== "000" && String(resultCode) !== "00") break;
+
+              const items = parsed?.response?.body?.items?.item;
+              if (!items) break;
+              const arr = Array.isArray(items) ? items : [items];
+
+              for (const it of arr) {
+                const year = toNum(it.dealYear);
+                const mon = toNum(it.dealMonth);
+                const price = toNum(it.dealAmount);
+                if (!year || !mon || price === null) continue;
+
+                rows.push({
+                  apt_name: it.aptNm ? String(it.aptNm).trim() : null,
+                  sigun_gu: district.name,
+                  dong: it.umdNm ? String(it.umdNm).trim() : null,
+                  jibun: it.jibun ? String(it.jibun).trim() : null,
+                  road_address: it.aptDong ? String(it.aptDong).trim() : null,
+                  area_sqm: toNum(it.excluUseAr),
+                  floor: toNum(it.floor),
+                  building_year: toNum(it.buildYear),
+                  contract_year: year,
+                  contract_month: mon,
+                  contract_day: toNum(it.dealDay),
+                  price_man_won: price,
+                });
+              }
+
+              if (arr.length < 100) break;
+              pageNo++;
+              if (pageNo > 30) break;
+            } catch {
+              apiErrors++;
+              break;
+            }
+          }
+
+          attempted += rows.length;
+
+          // Upsert in chunks of 500
+          for (let i = 0; i < rows.length; i += 500) {
+            const chunk = rows.slice(i, i + 500);
+            const { error } = await supabase.from("apartments").upsert(chunk as any, {
+              onConflict:
+                "apt_name,sigun_gu,dong,area_sqm,floor,contract_year,contract_month,contract_day,price_man_won",
+              ignoreDuplicates: true,
+            });
+            if (!error) inserted += chunk.length;
+          }
+        }
+      }
+
+      setResult({
+        error: null,
+        inserted,
+        attempted,
+        apiCalls,
+        apiErrors,
+        months,
+        durationMs: Date.now() - start,
       });
-      setResult(res);
     } catch (e) {
       setResult({
         error: e instanceof Error ? e.message : String(e),
-        inserted: 0,
-        durationMs: 0,
-      } as never);
+        inserted,
+        attempted,
+        apiCalls,
+        apiErrors,
+        months,
+        durationMs: Date.now() - start,
+      });
     } finally {
       setRunning(false);
+      setProgress("");
     }
   };
 
@@ -87,11 +244,11 @@ function AdminPage() {
           {/* API Key */}
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-2">
-              공공데이터 포털 API 키 (선택)
+              공공데이터 포털 API 키 (필수)
             </label>
             <input
               type="password"
-              placeholder="서비스 키 (미입력 시 환경변수 DATA_GO_KR_SERVICE_KEY 사용)"
+              placeholder="data.go.kr 서비스 키 입력"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               className="w-full rounded-xl border border-[#E5E8EB] bg-[#F2F4F6] px-4 py-2.5 text-sm text-[#191F28] placeholder:text-[#8B95A1] focus:outline-none focus:ring-2 focus:ring-[#3182F6]/40"
@@ -112,14 +269,18 @@ function AdminPage() {
                     onChange={(e) => setStartYear(Number(e.target.value))}
                     className="flex-1 rounded-xl border border-[#E5E8EB] bg-white px-3 py-2 text-sm text-[#191F28] focus:outline-none focus:ring-2 focus:ring-[#3182F6]/40"
                   >
-                    {YEARS.map((y) => <option key={y} value={y}>{y}년</option>)}
+                    {YEARS.map((y) => (
+                      <option key={y} value={y}>{y}년</option>
+                    ))}
                   </select>
                   <select
                     value={startMonth}
                     onChange={(e) => setStartMonth(Number(e.target.value))}
                     className="w-20 rounded-xl border border-[#E5E8EB] bg-white px-3 py-2 text-sm text-[#191F28] focus:outline-none focus:ring-2 focus:ring-[#3182F6]/40"
                   >
-                    {MONTHS.map((m) => <option key={m} value={m}>{m}월</option>)}
+                    {MONTHS.map((m) => (
+                      <option key={m} value={m}>{m}월</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -131,14 +292,18 @@ function AdminPage() {
                     onChange={(e) => setEndYear(Number(e.target.value))}
                     className="flex-1 rounded-xl border border-[#E5E8EB] bg-white px-3 py-2 text-sm text-[#191F28] focus:outline-none focus:ring-2 focus:ring-[#3182F6]/40"
                   >
-                    {YEARS.map((y) => <option key={y} value={y}>{y}년</option>)}
+                    {YEARS.map((y) => (
+                      <option key={y} value={y}>{y}년</option>
+                    ))}
                   </select>
                   <select
                     value={endMonth}
                     onChange={(e) => setEndMonth(Number(e.target.value))}
                     className="w-20 rounded-xl border border-[#E5E8EB] bg-white px-3 py-2 text-sm text-[#191F28] focus:outline-none focus:ring-2 focus:ring-[#3182F6]/40"
                   >
-                    {MONTHS.map((m) => <option key={m} value={m}>{m}월</option>)}
+                    {MONTHS.map((m) => (
+                      <option key={m} value={m}>{m}월</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -167,7 +332,7 @@ function AdminPage() {
             </div>
             {!allDistricts && (
               <div className="flex flex-wrap gap-1.5">
-                {DISTRICTS.map((d) => (
+                {DISTRICT_NAMES.map((d) => (
                   <button
                     key={d}
                     onClick={() => toggleDistrict(d)}
@@ -199,11 +364,18 @@ function AdminPage() {
             className="w-full bg-[#3182F6] hover:bg-[#1b6ef3] text-white rounded-xl"
           >
             {running ? (
-              <><Loader2 className="mr-2 h-4 w-4 animate-spin" />적재 중... (수십 초 소요)</>
+              <><Loader2 className="mr-2 h-4 w-4 animate-spin" />적재 중... 브라우저를 닫지 마세요</>
             ) : (
               <><Database className="mr-2 h-4 w-4" />데이터 적재 실행</>
             )}
           </Button>
+
+          {/* Progress */}
+          {running && progress && (
+            <div className="rounded-xl bg-[#F2F4F6] border border-[#E5E8EB] px-4 py-3 text-xs text-[#8B95A1] font-mono">
+              {progress}
+            </div>
+          )}
         </div>
 
         {/* Result */}
@@ -225,27 +397,19 @@ function AdminPage() {
                 <h3 className="font-semibold text-[#191F28]">
                   {result.error ? "적재 실패" : "적재 완료"}
                 </h3>
-                <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm number-tabular">
+                <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
                   <dt className="text-[#8B95A1]">적재 건수</dt>
-                  <dd className="font-medium text-[#191F28]">{result.inserted?.toLocaleString() ?? 0}</dd>
-                  {"attempted" in result && (
-                    <>
-                      <dt className="text-[#8B95A1]">파싱 건수</dt>
-                      <dd className="font-medium text-[#191F28]">{result.attempted?.toLocaleString()}</dd>
-                    </>
-                  )}
-                  {"apiCalls" in result && (
-                    <>
-                      <dt className="text-[#8B95A1]">API 호출</dt>
-                      <dd className="font-medium text-[#191F28]">{result.apiCalls} (오류 {result.apiErrors})</dd>
-                    </>
-                  )}
-                  {"months" in result && result.months && (
-                    <>
-                      <dt className="text-[#8B95A1]">대상 월</dt>
-                      <dd className="font-medium text-[#191F28]">{result.months.join(", ")}</dd>
-                    </>
-                  )}
+                  <dd className="font-medium text-[#191F28]">{result.inserted.toLocaleString()}</dd>
+                  <dt className="text-[#8B95A1]">파싱 건수</dt>
+                  <dd className="font-medium text-[#191F28]">{result.attempted.toLocaleString()}</dd>
+                  <dt className="text-[#8B95A1]">API 호출</dt>
+                  <dd className="font-medium text-[#191F28]">{result.apiCalls} (오류 {result.apiErrors})</dd>
+                  <dt className="text-[#8B95A1]">대상 월</dt>
+                  <dd className="font-medium text-[#191F28]">
+                    {result.months.length > 6
+                      ? `${result.months[0]} ~ ${result.months[result.months.length - 1]} (${result.months.length}개월)`
+                      : result.months.join(", ")}
+                  </dd>
                   <dt className="text-[#8B95A1]">소요 시간</dt>
                   <dd className="font-medium text-[#191F28]">{(result.durationMs / 1000).toFixed(1)}s</dd>
                 </dl>
@@ -257,13 +421,14 @@ function AdminPage() {
           </div>
         )}
 
-        {/* Info box */}
+        {/* Info */}
         <div className="mt-6 rounded-2xl bg-[#EFF6FF] border border-[#3182F6]/20 p-5">
           <h4 className="font-semibold text-[#191F28] text-sm mb-2">안내</h4>
           <ul className="text-xs text-[#8B95A1] space-y-1.5 list-disc list-inside">
-            <li>공공데이터 포털(data.go.kr)에서 국토교통부 아파트 매매 실거래가 서비스 키를 발급받으세요.</li>
-            <li>데이터는 apartments 테이블에 upsert됩니다. 중복 거래는 자동으로 무시됩니다.</li>
-            <li>기간이 길수록 소요 시간이 증가합니다 (자치구 × 월 수 만큼 API 호출).</li>
+            <li>공공데이터 포털(data.go.kr)에서 <strong>국토교통부 아파트 매매 실거래가</strong> 서비스 키를 발급받으세요.</li>
+            <li>데이터는 apartments 테이블에 upsert 됩니다. 중복 거래는 자동 무시됩니다.</li>
+            <li>기간이 길수록 시간이 오래 걸립니다 (자치구 수 × 월 수 만큼 API 호출).</li>
+            <li>전체 기간(2006~현재) 적재 시 수십 분이 소요될 수 있습니다. 탭을 닫지 마세요.</li>
             <li>이 페이지는 내비게이션에 노출되지 않습니다. URL 직접 접근: /admin</li>
           </ul>
         </div>
