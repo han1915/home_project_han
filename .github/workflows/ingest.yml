@@ -1,0 +1,37 @@
+name: 서울 실거래가 자동 적재
+
+on:
+  schedule:
+    - cron: "0 1 5 * *"   # 매월 5일 오전 10시 KST (01:00 UTC)
+  workflow_dispatch:       # 수동 실행
+    inputs:
+      ym_start:
+        description: "시작 연월 (YYYYMM)"
+        required: false
+        default: ""
+      ym_end:
+        description: "종료 연월 (YYYYMM)"
+        required: false
+        default: ""
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 의존성 설치
+        run: bun install --frozen-lockfile
+
+      - name: 실거래가 적재
+        env:
+          DATA_GO_KR_KEY:               ${{ secrets.DATA_GO_KR_KEY }}
+          VITE_SUPABASE_URL:            ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          YM_START: ${{ github.event.inputs.ym_start }}
+          YM_END:   ${{ github.event.inputs.ym_end }}
+        run: node scripts/seed.mjs

@@ -51,11 +51,13 @@ export default async function handler(req: any, res: any) {
       const xml = await fetchRes.text();
       const parsed: any = parser.parse(xml);
 
-      // API error check
+      // XMLParser converts "000" → number 0; treat 0 as success
       const resultCode =
         parsed?.response?.header?.resultCode ??
         parsed?.OpenAPI_ServiceResponse?.cmmMsgHeader?.returnReasonCode;
-      if (resultCode !== undefined && String(resultCode) !== "000" && String(resultCode) !== "00") {
+      const codeNum = resultCode !== undefined && resultCode !== null
+        ? parseInt(String(resultCode), 10) : 0;
+      if (!isNaN(codeNum) && codeNum !== 0) {
         const msg = parsed?.response?.header?.resultMsg ?? String(resultCode);
         return res.status(400).json({ error: `API 오류: ${msg}` });
       }
