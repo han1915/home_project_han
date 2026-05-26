@@ -185,7 +185,7 @@ function MarketPage() {
           <div className="mt-5 flex flex-wrap items-center gap-5">
             <div className="inline-flex gap-1 rounded-xl bg-[#F2F4F6] p-1">
               {(["seoul", "district"] as const).map(t => (
-                <button key={t} onClick={() => setActiveTab(t)}
+                <button key={t} onClick={() => { setActiveTab(t); trackEvent("market_tab_change", { tab: t }); }}
                   className={`rounded-lg px-5 py-2 text-sm font-semibold transition ${
                     activeTab === t ? "bg-white text-[#191F28] shadow-sm" : "text-[#8B95A1] hover:text-[#191F28]"
                   }`}>
@@ -220,7 +220,7 @@ function MarketPage() {
           monthlySeoulPrev={monthlySeoulPrev}
           districtStats={districtStats ?? []}
           priceDist={priceDistSeoul ?? []}
-          onDistrictClick={d => { setDistrict(d); setActiveTab("district"); }}
+          onDistrictClick={d => { setDistrict(d); setActiveTab("district"); trackEvent("market_district_select", { district: d, source: "chart" }); }}
         />
       ) : (
         <DistrictTab
@@ -500,7 +500,7 @@ function DistrictTab({ selectedYear, district, setDistrict, yearlyDistrict, year
         <h3 className="text-xs font-semibold uppercase tracking-wider text-[#8B95A1] mb-3">자치구</h3>
         <div className="flex flex-wrap gap-1.5">
           {SEOUL_DISTRICTS.map(d => (
-            <button key={d} onClick={() => setDistrict(d)}
+            <button key={d} onClick={() => { setDistrict(d); trackEvent("market_district_select", { district: d, source: "list" }); }}
               className={`rounded-lg border px-2.5 py-1 text-xs transition ${
                 district === d ? "border-[#3182F6] bg-[#3182F6] text-white"
                   : "border-[#E5E8EB] bg-white text-[#8B95A1] hover:border-[#3182F6] hover:text-[#3182F6]"

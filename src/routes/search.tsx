@@ -200,6 +200,7 @@ function SearchPage() {
       const next = new Set(prev);
       if (next.has(id)) {
         next.delete(id);
+        trackEvent("favorite_remove", { property_id: id });
       } else {
         next.add(id);
         const prop = data?.find(p => p.id === id);
@@ -350,6 +351,7 @@ function SearchPage() {
             <Slider
               value={priceRange} min={0} max={300000} step={5000}
               onValueChange={v => setPriceRange([v[0], v[1]] as [number, number])}
+              onValueCommit={v => trackEvent("search_price_filter", { price_min: v[0], price_max: v[1] })}
               className="my-4"
             />
             <div className="flex justify-between text-xs text-[#8B95A1]">
@@ -360,7 +362,7 @@ function SearchPage() {
 
           {(gu !== "전체" || year !== "전체" || month !== "전체" || priceRange[0] > 0 || priceRange[1] < 300000) && (
             <button
-              onClick={() => { setGu("전체"); setYear("전체"); setMonth("전체"); setPriceRange([0, 300000]); }}
+              onClick={() => { setGu("전체"); setYear("전체"); setMonth("전체"); setPriceRange([0, 300000]); trackEvent("search_filter_reset"); }}
               className="w-full rounded-xl border border-[#E5E8EB] bg-white py-2 text-xs text-[#8B95A1] hover:border-[#F04452] hover:text-[#F04452] transition"
             >
               필터 초기화
@@ -443,7 +445,7 @@ function SearchPage() {
               {hasMore && (
                 <div className="mt-6 text-center">
                   <button
-                    onClick={() => setPage(p => p + 1)}
+                    onClick={() => { setPage(p => p + 1); trackEvent("search_load_more", { page: page + 1, total: filtered.length }); }}
                     className="inline-flex items-center gap-2 rounded-xl border border-[#E5E8EB] bg-white px-6 py-3 text-sm font-semibold text-[#191F28] hover:border-[#3182F6] hover:text-[#3182F6] transition"
                   >
                     <ChevronDown className="h-4 w-4" />
