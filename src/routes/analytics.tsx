@@ -2,13 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  ResponsiveContainer,
-  BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell,
-  LineChart, Line, Legend,
-} from "recharts";
-import {
-  Users, Calendar, Activity, Target, TrendingDown, AlertTriangle,
-  Home, Search, Building2, Heart, Lightbulb,
+  Users, Target, AlertTriangle,
+  Home, Search, Building2, Heart, ArrowDown,
 } from "lucide-react";
 import { SiteHeader } from "@/components/SiteHeader";
 import { supabase } from "@/integrations/supabase/client";
@@ -17,8 +12,8 @@ import { trackEvent } from "@/lib/tracking";
 export const Route = createFileRoute("/analytics")({
   head: () => ({
     meta: [
-      { title: "분석 대시보드 · HomeDirect" },
-      { name: "description", content: "사용자 행동 퍼널 · 전환율 · 검색 트렌드 분석" },
+      { title: "퍼널 분석 · HomeDirect" },
+      { name: "description", content: "사용자 전환 퍼널 분석 대시보드" },
     ],
   }),
   component: AnalyticsPage,
@@ -52,17 +47,21 @@ const EVENT_LABELS: Record<string, string> = {
   analytics_view:         "분석 대시보드",
 };
 
-const PRICE_BUCKETS: { label: string; test: (max: number) => boolean }[] = [
-  { label: "5억↓",   test: (m) => m <= 50000 },
-  { label: "5~10억",  test: (m) => m > 50000  && m <= 100000 },
-  { label: "10~15억", test: (m) => m > 100000 && m <= 150000 },
-  { label: "15~20억", test: (m) => m > 150000 && m <= 200000 },
-  { label: "20~25억", test: (m) => m > 200000 && m <= 250000 },
-  { label: "25억+",   test: (m) => m > 250000 && m < 300000  },
-  { label: "제한없음", test: (m) => m >= 300000 },
-];
-
-// ── 타입 ──────────────────────────────────────────────────────────────────────
+const PAGE_MAP: Record<string, string> = {
+  home_view:              "홈",
+  search_start:           "검색/매물",
+  search_filter_apply:    "검색/매물",
+  search_price_filter:    "검색/매물",
+  search_filter_reset:    "검색/매물",
+  search_load_more:       "검색/매물",
+  property_view:          "검색/매물",
+  favorite_add:           "검색/매물",
+  favorite_remove:        "검색/매물",
+  market_view:            "시장분석",
+  market_tab_change:      "시장분석",
+  market_district_select: "시장분석",
+  analytics_view:         "분석대시보드",
+};
 
 type EventRow = {
   event_type: string;
@@ -70,6 +69,14 @@ type EventRow = {
   event_data: Record<string, unknown> | null;
   created_at: string;
 };
+
+// ── 헬퍼 ──────────────────────────────────────────────────────────────────────
+
+function convColor(pct: number) {
+  if (pct >= 50) return "text-emerald-600";
+  if (pct >= 25) return "text-amber-500";
+  return "text-[#F04452]";
+}
 
 // ── 페이지 ────────────────────────────────────────────────────────────────────
 
@@ -94,38 +101,27 @@ function AnalyticsPage() {
   const stats = useMemo(() => {
     if (!events) return null;
 
-    // 이벤트 타입별 세션 집합 & 발생 횟수
     const sessionsBy: Record<string, Set<string>> = {};
     const countBy: Record<string, number> = {};
     for (const e of events) {
-      if (!sessionsBy[e.event_type]) {
-        sessionsBy[e.event_type] = new Set();
-        countBy[e.event_type] = 0;
-      }
+      if (!sessionsBy[e.event_type]) { sessionsBy[e.event_type] = new Set(); countBy[e.event_type] = 0; }
       sessionsBy[e.event_type].add(e.session_id);
       countBy[e.event_type]++;
     }
 
-    const allSessions = new Set(events.map((e) => e.session_id));
-    const totalSessions = allSessions.size;
-    const today = new Date().toISOString().slice(0, 10);
-    const todaySessions = new Set(
-      events.filter((e) => e.created_at.startsWith(today)).map((e) => e.session_id)
-    ).size;
-    const totalEvents = events.length;
-    const avgEvents = totalSessions > 0 ? totalEvents / totalSessions : 0;
+    const totalSessions = new Set(events.map((e) => e.session_id)).size;
+    const totalEvents   = events.length;
 
-    // 4단계 퍼널
+    // ── ② 퍼널 ────────────────────────────────────────────────────────────────
     const funnel = FUNNEL.map((step, i) => {
-      const count = sessionsBy[step.key]?.size ?? 0;
-      const prevCount =
-        i === 0 ? count : (sessionsBy[FUNNEL[i - 1].key]?.size ?? 0);
-      const conv = i === 0 ? 100 : prevCount > 0 ? (count / prevCount) * 100 : 0;
+      const count     = sessionsBy[step.key]?.size ?? 0;
+      const prevCount = i === 0 ? count : (sessionsBy[FUNNEL[i - 1].key]?.size ?? 0);
+      const conv      = i === 0 ? 100 : prevCount > 0 ? (count / prevCount) * 100 : 0;
       return { ...step, count, conv, dropoff: i === 0 ? 0 : 100 - conv };
     });
 
-    const homeCount = funnel[0].count;
-    const favCount  = funnel[3].count;
+    const homeCount   = funnel[0].count;
+    const favCount    = funnel[3].count;
     const overallConv = homeCount > 0 ? (favCount / homeCount) * 100 : 0;
 
     let bottleneckIdx = 1;
@@ -133,26 +129,44 @@ function AnalyticsPage() {
       if (funnel[i].dropoff > funnel[bottleneckIdx].dropoff) bottleneckIdx = i;
     }
 
-    // 일별 트렌드
-    const dayMap: Record<string, Record<string, Set<string>>> = {};
+    // ── ③ 이탈 구간 ───────────────────────────────────────────────────────────
+    const stepFlags: Record<string, { s1: number; s2: number; s3: number; s4: number }> = {};
     for (const e of events) {
-      const d = e.created_at.slice(0, 10);
-      if (!dayMap[d]) dayMap[d] = {};
-      if (!dayMap[d][e.event_type]) dayMap[d][e.event_type] = new Set();
-      dayMap[d][e.event_type].add(e.session_id);
+      if (!stepFlags[e.session_id]) stepFlags[e.session_id] = { s1: 0, s2: 0, s3: 0, s4: 0 };
+      if (e.event_type === "home_view")     stepFlags[e.session_id].s1 = 1;
+      if (e.event_type === "search_start")  stepFlags[e.session_id].s2 = 1;
+      if (e.event_type === "property_view") stepFlags[e.session_id].s3 = 1;
+      if (e.event_type === "favorite_add")  stepFlags[e.session_id].s4 = 1;
     }
-    const daily = Object.keys(dayMap)
-      .sort()
-      .map((d) => ({
-        date:     d.slice(5),
-        home:     dayMap[d]["home_view"]?.size     ?? 0,
-        search:   dayMap[d]["search_start"]?.size  ?? 0,
-        property: dayMap[d]["property_view"]?.size ?? 0,
-        favorite: dayMap[d]["favorite_add"]?.size  ?? 0,
-        market:   dayMap[d]["market_view"]?.size   ?? 0,
-      }));
+    const sf = Object.values(stepFlags);
+    const searchCount = sessionsBy["search_start"]?.size ?? 0;
+    const propCount   = sessionsBy["property_view"]?.size ?? 0;
 
-    // 이벤트 분포
+    const dropoffs = [
+      {
+        label: "홈에서 이탈",
+        sub:   "검색 페이지 미진입",
+        count: sf.filter((s) => s.s1 && !s.s2).length,
+        base:  homeCount,
+      },
+      {
+        label: "검색 후 이탈",
+        sub:   "매물 카드 미클릭",
+        count: sf.filter((s) => s.s2 && !s.s3).length,
+        base:  searchCount,
+      },
+      {
+        label: "매물 보고 이탈",
+        sub:   "찜하기 미완료",
+        count: sf.filter((s) => s.s3 && !s.s4).length,
+        base:  propCount,
+      },
+    ].map((d) => ({ ...d, pct: d.base > 0 ? (d.count / d.base) * 100 : 0 }));
+
+    // 최대 이탈 구간
+    const maxDropoff = dropoffs.reduce((mx, d) => (d.pct > mx.pct ? d : mx), dropoffs[0]);
+
+    // ── ① 이벤트 분포 ─────────────────────────────────────────────────────────
     const eventDist = Object.keys(countBy)
       .map((type) => ({
         type,
@@ -163,62 +177,42 @@ function AnalyticsPage() {
       }))
       .sort((a, b) => b.count - a.count);
 
-    // 검색 인기 자치구 (search_filter_apply.sigun_gu)
-    const searchDistMap: Record<string, number> = {};
+    // ── ④ 페이지별 성과 ───────────────────────────────────────────────────────
+    const pageMap: Record<string, { sessions: Set<string>; events: number; fav: Set<string> }> = {};
     for (const e of events) {
-      if (e.event_type === "search_filter_apply") {
-        const k = e.event_data?.sigun_gu as string | undefined;
-        if (k && k !== "전체") searchDistMap[k] = (searchDistMap[k] || 0) + 1;
-      }
+      const page = PAGE_MAP[e.event_type] ?? "기타";
+      if (!pageMap[page]) pageMap[page] = { sessions: new Set(), events: 0, fav: new Set() };
+      pageMap[page].sessions.add(e.session_id);
+      pageMap[page].events++;
+      if (e.event_type === "favorite_add") pageMap[page].fav.add(e.session_id);
     }
-    const searchDistChart = Object.entries(searchDistMap)
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
-
-    // 시장분석 관심 자치구 (market_district_select.district)
-    const marketDistMap: Record<string, number> = {};
-    for (const e of events) {
-      if (e.event_type === "market_district_select") {
-        const k = e.event_data?.district as string | undefined;
-        if (k) marketDistMap[k] = (marketDistMap[k] || 0) + 1;
-      }
-    }
-    const marketDistChart = Object.entries(marketDistMap)
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
-
-    // 가격 선호도 (search_price_filter.price_max)
-    const priceCounts: Record<string, number> = {};
-    for (const e of events) {
-      if (e.event_type === "search_price_filter") {
-        const max = e.event_data?.price_max as number | undefined;
-        if (max != null) {
-          const bucket = PRICE_BUCKETS.find((b) => b.test(max));
-          if (bucket) priceCounts[bucket.label] = (priceCounts[bucket.label] || 0) + 1;
-        }
-      }
-    }
-    const priceChart = PRICE_BUCKETS.map((b) => ({
-      name:  b.label,
-      count: priceCounts[b.label] || 0,
-    })).filter((b) => b.count > 0);
+    const pagePerf = Object.entries(pageMap)
+      .map(([page, { sessions, events: ev, fav }]) => ({
+        page,
+        sessions: sessions.size,
+        events:   ev,
+        fav:      fav.size,
+        cvr:      sessions.size > 0 ? (fav.size / sessions.size) * 100 : 0,
+      }))
+      .sort((a, b) => b.sessions - a.sessions);
 
     return {
-      totalSessions, todaySessions, avgEvents, overallConv,
+      totalSessions, overallConv,
       funnel, bottleneckIdx,
-      daily, eventDist,
-      searchDistChart, marketDistChart, priceChart,
+      dropoffs, maxDropoff,
+      eventDist,
+      pagePerf,
     };
   }, [events]);
+
+  // ── 로딩 / 빈 상태 ──────────────────────────────────────────────────────────
 
   if (isLoading || !stats) {
     return (
       <div className="min-h-screen bg-[#F2F4F6]">
         <SiteHeader />
         <div className="flex items-center justify-center py-24 text-[#8B95A1]">
-          분석 데이터 집계 중...
+          집계 중...
         </div>
       </div>
     );
@@ -231,14 +225,15 @@ function AnalyticsPage() {
         <div className="mx-auto max-w-2xl px-5 py-24 text-center">
           <h1 className="text-2xl font-bold text-[#191F28]">아직 데이터가 없습니다</h1>
           <p className="mt-3 text-sm text-[#8B95A1]">
-            사용자가 사이트를 방문하면 자동으로 이벤트가 수집되어 분석됩니다.
+            사용자가 방문하면 자동으로 집계됩니다.
           </p>
         </div>
       </div>
     );
   }
 
-  const bottleneck = stats.funnel[stats.bottleneckIdx];
+  const bottleneck    = stats.funnel[stats.bottleneckIdx];
+  const maxFunnelCount = stats.funnel[0].count || 1;
 
   return (
     <div className="min-h-screen bg-[#F2F4F6]">
@@ -246,12 +241,10 @@ function AnalyticsPage() {
 
       {/* 헤더 */}
       <div className="bg-white border-b border-[#E5E8EB]">
-        <div className="mx-auto max-w-7xl px-5 py-8 flex flex-wrap items-center justify-between gap-4">
+        <div className="mx-auto max-w-5xl px-5 py-8 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-[#191F28]">분석 대시보드</h1>
-            <p className="mt-1 text-sm text-[#8B95A1]">
-              사용자 행동 · 전환 퍼널 · 검색 트렌드
-            </p>
+            <h1 className="text-2xl font-bold text-[#191F28]">퍼널 분석</h1>
+            <p className="mt-1 text-sm text-[#8B95A1]">홈 방문 → 찜하기 4단계 전환 분석</p>
           </div>
           <div className="flex gap-2">
             {DAY_OPTIONS.map((d) => (
@@ -271,40 +264,40 @@ function AnalyticsPage() {
         </div>
       </div>
 
-      <div className="mx-auto max-w-7xl space-y-8 px-5 py-8">
+      <div className="mx-auto max-w-5xl space-y-8 px-5 py-8">
 
         {/* KPI */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-          <KPI icon={Users}         label="총 세션"       value={stats.totalSessions.toLocaleString()} />
-          <KPI icon={Calendar}      label="오늘 방문"      value={stats.todaySessions.toLocaleString()} />
-          <KPI icon={Activity}      label="세션당 이벤트"  value={stats.avgEvents.toFixed(1)} />
-          <KPI icon={Target}        label="홈→찜 전환율"  value={`${stats.overallConv.toFixed(1)}%`} />
-          <KPI icon={AlertTriangle} label="최대 병목"      value={bottleneck.label} accent />
-          <KPI icon={TrendingDown}  label="병목 이탈률"    value={`${bottleneck.dropoff.toFixed(1)}%`} accent />
+        <div className="grid grid-cols-3 gap-4">
+          <KPI icon={Users}         label="총 세션"    value={stats.totalSessions.toLocaleString()} />
+          <KPI icon={Target}        label="전체 CVR"   value={`${stats.overallConv.toFixed(1)}%`}
+               highlight={stats.overallConv >= 10} />
+          <KPI icon={AlertTriangle} label="최대 병목"  value={bottleneck.label}
+               sub={`이탈 ${bottleneck.dropoff.toFixed(1)}%`} accent />
         </div>
 
-        {/* 전환 퍼널 */}
-        <Section title="전환 퍼널" subtitle="홈 방문 → 찜하기 4단계 전환율">
-          <div className="space-y-2">
+        {/* ② 전환 퍼널 */}
+        <Section label="②" title="전환 퍼널" subtitle="각 단계별 세션 수와 다음 단계 전환율">
+          <div className="space-y-1">
             {stats.funnel.map((step, i) => {
-              const max = stats.funnel[0].count || 1;
               const isBottleneck = i === stats.bottleneckIdx && i > 0;
+              const barWidth     = (step.count / maxFunnelCount) * 100;
+              const nextConv     = i < stats.funnel.length - 1 ? stats.funnel[i + 1].conv : null;
+              const dropCount    = i < stats.funnel.length - 1
+                ? step.count - stats.funnel[i + 1].count
+                : 0;
+
               return (
                 <div key={step.key}>
-                  <div
-                    className={`rounded-xl border p-4 ${
-                      isBottleneck
-                        ? "border-[#F04452]/40 bg-[#F04452]/5"
-                        : "border-[#E5E8EB] bg-white"
-                    }`}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 text-sm font-medium text-[#191F28]">
-                        <span
-                          className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs text-white ${
-                            isBottleneck ? "bg-[#F04452]" : "bg-[#3182F6]"
-                          }`}
-                        >
+                  <div className={`rounded-xl border p-4 transition ${
+                    isBottleneck
+                      ? "border-[#F04452]/40 bg-[#F04452]/5"
+                      : "border-[#E5E8EB] bg-white"
+                  }`}>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2 text-sm font-semibold text-[#191F28]">
+                        <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs text-white ${
+                          isBottleneck ? "bg-[#F04452]" : "bg-[#3182F6]"
+                        }`}>
                           {i + 1}
                         </span>
                         <step.Icon className="h-4 w-4 text-[#8B95A1]" />
@@ -315,215 +308,190 @@ function AnalyticsPage() {
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-4 text-sm text-[#8B95A1] number-tabular">
-                        <span className="font-semibold text-[#191F28]">
-                          {step.count.toLocaleString()} 세션
+                      <div className="text-right">
+                        <span className="text-2xl font-bold number-tabular text-[#191F28]">
+                          {step.count.toLocaleString()}
                         </span>
+                        <span className="ml-1 text-sm text-[#8B95A1]">세션</span>
                         {i > 0 && (
-                          <span className={isBottleneck ? "font-semibold text-[#F04452]" : ""}>
-                            전환 {step.conv.toFixed(1)}% · 이탈 {step.dropoff.toFixed(1)}%
-                          </span>
+                          <div className="text-xs text-[#8B95A1]">
+                            전체의 {((step.count / maxFunnelCount) * 100).toFixed(0)}%
+                          </div>
                         )}
                       </div>
                     </div>
-                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#F2F4F6]">
+                    <div className="h-4 overflow-hidden rounded-full bg-[#F2F4F6]">
                       <div
-                        className={`h-full rounded-full transition-all duration-500 ${
+                        className={`h-full rounded-full transition-all duration-700 ${
                           isBottleneck ? "bg-[#F04452]" : "bg-[#3182F6]"
                         }`}
-                        style={{ width: `${(step.count / max) * 100}%` }}
+                        style={{ width: `${barWidth}%` }}
                       />
                     </div>
                   </div>
-                  {i < stats.funnel.length - 1 && (
-                    <div className="ml-[18px] h-3 w-px border-l-2 border-dashed border-[#E5E8EB]" />
+
+                  {/* 단계 사이 전환율 화살표 */}
+                  {nextConv !== null && (
+                    <div className="flex items-center justify-start gap-3 py-2 pl-7">
+                      <ArrowDown className={`h-4 w-4 ${convColor(nextConv)}`} />
+                      <span className={`text-sm font-bold ${convColor(nextConv)}`}>
+                        전환 {nextConv.toFixed(1)}%
+                      </span>
+                      <span className="text-xs text-[#C9CDD2]">
+                        · {dropCount.toLocaleString()}명 이탈
+                      </span>
+                    </div>
                   )}
                 </div>
               );
             })}
           </div>
+          <Insight
+            tone={stats.overallConv >= 10 ? "success" : "info"}
+            text={
+              stats.overallConv >= 10
+                ? `전체 CVR ${stats.overallConv.toFixed(1)}% — 목표(10%) 달성! 재방문 유도를 강화하세요.`
+                : `전체 CVR ${stats.overallConv.toFixed(1)}% — 목표(10%)까지 ${(10 - stats.overallConv).toFixed(1)}%p. 홈 → 검색 진입 유도가 핵심입니다.`
+            }
+          />
         </Section>
 
-        {/* 일별 트렌드 + 이벤트 분포 */}
+        {/* ③ 이탈 구간 + ① 이벤트 분포 */}
         <div className="grid gap-6 lg:grid-cols-2">
-          <Section title="일별 트래픽 추이" subtitle={`최근 ${days}일 · 이벤트 유형별 고유 세션`}>
-            <div className="h-72">
-              <ResponsiveContainer>
-                <LineChart data={stats.daily}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EB" />
-                  <XAxis dataKey="date" stroke="#8B95A1" fontSize={12} tick={{ fill: "#8B95A1" }} />
-                  <YAxis stroke="#8B95A1" fontSize={12} tick={{ fill: "#8B95A1" }} />
-                  <Tooltip
-                    contentStyle={{ borderRadius: 12, border: "1px solid #E5E8EB", fontSize: 12 }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Line type="monotone" dataKey="home"     stroke="#191F28" strokeWidth={2} name="홈"      dot={false} />
-                  <Line type="monotone" dataKey="search"   stroke="#4D9BF8" strokeWidth={2} name="검색"    dot={false} />
-                  <Line type="monotone" dataKey="property" stroke="#3182F6" strokeWidth={2} name="매물조회" dot={false} />
-                  <Line type="monotone" dataKey="favorite" stroke="#F04452" strokeWidth={2} name="찜"      dot={false} />
-                  <Line type="monotone" dataKey="market"   stroke="#10B981" strokeWidth={2} name="시장분석" dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
+
+          <Section label="③" title="이탈 구간" subtitle="각 단계에서 이탈한 세션 수와 비율">
+            <div className="space-y-3">
+              {stats.dropoffs.map((d) => {
+                const isMax = d.label === stats.maxDropoff.label;
+                return (
+                  <div
+                    key={d.label}
+                    className={`flex items-center justify-between rounded-xl border p-4 ${
+                      isMax
+                        ? "border-[#F04452]/40 bg-[#F04452]/5"
+                        : "border-[#E5E8EB] bg-white"
+                    }`}
+                  >
+                    <div>
+                      <div className="text-sm font-semibold text-[#191F28] flex items-center gap-2">
+                        {d.label}
+                        {isMax && (
+                          <span className="rounded-md bg-[#F04452]/15 px-2 py-0.5 text-xs font-semibold text-[#F04452]">
+                            최다
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-[#8B95A1] mt-0.5">{d.sub}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className={`text-2xl font-bold number-tabular ${
+                        isMax ? "text-[#F04452]" : "text-[#191F28]"
+                      }`}>
+                        {d.count}명
+                      </div>
+                      <div className="text-xs text-[#8B95A1]">{d.pct.toFixed(0)}% 이탈</div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
+            <Insight
+              tone="danger"
+              text={`${stats.maxDropoff.label}이 가장 많습니다. ${
+                stats.maxDropoff.label === "홈에서 이탈"
+                  ? "홈 CTA 버튼 가시성과 서비스 가치 전달을 점검하세요."
+                  : stats.maxDropoff.label === "검색 후 이탈"
+                  ? "검색 결과 카드 정보 밀도와 정렬 방식을 개선해보세요."
+                  : "매물 상세 정보와 찜 버튼 접근성을 개선해보세요."
+              }`}
+            />
           </Section>
 
-          <Section title="이벤트 분포" subtitle="이벤트 유형별 발생 건수 및 세션 수">
-            <div className="overflow-y-auto" style={{ maxHeight: 288 }}>
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-white">
-                  <tr className="border-b border-[#E5E8EB]">
-                    <th className="pb-2 text-left text-xs font-medium text-[#8B95A1]">이벤트</th>
-                    <th className="pb-2 text-right text-xs font-medium text-[#8B95A1]">횟수</th>
-                    <th className="pb-2 text-right text-xs font-medium text-[#8B95A1]">세션</th>
-                    <th className="pb-2 pl-4 w-24"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#F2F4F6]">
-                  {stats.eventDist.map((ev) => (
-                    <tr key={ev.type} className="hover:bg-[#F8F9FA]">
-                      <td className="py-2">
-                        <div className="font-medium text-[#191F28]">{ev.label}</div>
-                        <div className="text-xs font-mono text-[#C9CDD2]">{ev.type}</div>
-                      </td>
-                      <td className="py-2 text-right number-tabular text-[#191F28]">
-                        {ev.count.toLocaleString()}
-                      </td>
-                      <td className="py-2 text-right number-tabular text-[#8B95A1]">
-                        {ev.sessions.toLocaleString()}
-                      </td>
-                      <td className="py-2 pl-4">
-                        <div className="h-1.5 overflow-hidden rounded-full bg-[#F2F4F6]">
-                          <div
-                            className="h-full rounded-full bg-[#3182F6]"
-                            style={{ width: `${ev.pct}%` }}
-                          />
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <Section label="①" title="이벤트 분포" subtitle="이벤트 유형별 발생 건수">
+            <div className="space-y-2.5">
+              {stats.eventDist.map((ev, i) => (
+                <div key={ev.type} className="flex items-center gap-3">
+                  <div className="w-5 shrink-0 text-right text-xs text-[#C9CDD2] font-mono">
+                    {i + 1}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="min-w-0">
+                        <span className="text-xs font-medium text-[#191F28] truncate block">
+                          {ev.label}
+                        </span>
+                        <span className="text-[10px] font-mono text-[#C9CDD2]">{ev.type}</span>
+                      </div>
+                      <span className="text-xs font-semibold text-[#191F28] ml-2 shrink-0 number-tabular">
+                        {ev.count.toLocaleString()}건
+                      </span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-[#F2F4F6]">
+                      <div
+                        className="h-full rounded-full bg-[#3182F6] transition-all duration-500"
+                        style={{ width: `${ev.pct}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </Section>
         </div>
 
-        {/* 자치구 분석 */}
-        {(stats.searchDistChart.length > 0 || stats.marketDistChart.length > 0) && (
-          <div className="grid gap-6 lg:grid-cols-2">
-            {stats.searchDistChart.length > 0 && (
-              <Section title="검색 인기 자치구" subtitle="필터 적용 횟수 기준 상위 10개">
-                <div className="h-64">
-                  <ResponsiveContainer>
-                    <BarChart data={stats.searchDistChart} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EB" vertical={false} />
-                      <XAxis dataKey="name" stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} />
-                      <YAxis stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} />
-                      <Tooltip
-                        contentStyle={{ borderRadius: 12, border: "1px solid #E5E8EB", fontSize: 12 }}
-                        formatter={(v: number) => [v, "검색 횟수"]}
-                      />
-                      <Bar dataKey="count" name="검색 횟수" radius={[4, 4, 0, 0]}>
-                        {stats.searchDistChart.map((_, idx) => (
-                          <Cell
-                            key={idx}
-                            fill="#3182F6"
-                            fillOpacity={1 - (idx / Math.max(stats.searchDistChart.length - 1, 1)) * 0.5}
-                          />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Section>
-            )}
-
-            {stats.marketDistChart.length > 0 ? (
-              <Section title="시장분석 관심 자치구" subtitle="시장분석 탭에서 선택된 자치구 기준">
-                <div className="h-64">
-                  <ResponsiveContainer>
-                    <BarChart data={stats.marketDistChart} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EB" vertical={false} />
-                      <XAxis dataKey="name" stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} />
-                      <YAxis stroke="#8B95A1" fontSize={11} tick={{ fill: "#8B95A1" }} />
-                      <Tooltip
-                        contentStyle={{ borderRadius: 12, border: "1px solid #E5E8EB", fontSize: 12 }}
-                        formatter={(v: number) => [v, "선택 횟수"]}
-                      />
-                      <Bar dataKey="count" fill="#10B981" name="선택 횟수" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Section>
-            ) : (
-              stats.searchDistChart.length > 0 && (
-                <Section title="시장분석 관심 자치구" subtitle="시장분석 탭에서 선택된 자치구 기준">
-                  <div className="flex h-64 items-center justify-center text-sm text-[#8B95A1]">
-                    아직 수집된 데이터가 없습니다
+        {/* ④ 페이지별 성과 */}
+        <Section label="④" title="페이지별 성과" subtitle="페이지 진입 세션 수와 찜하기 전환율">
+          <div className="space-y-3">
+            {stats.pagePerf.map((p) => (
+              <div
+                key={p.page}
+                className="flex items-center gap-4 rounded-xl border border-[#E5E8EB] bg-white px-5 py-4"
+              >
+                <div className="w-28 shrink-0">
+                  <div className="text-sm font-semibold text-[#191F28]">{p.page}</div>
+                  <div className="text-xs text-[#8B95A1] mt-0.5 number-tabular">
+                    {p.sessions.toLocaleString()} 세션 · {p.events.toLocaleString()} 이벤트
                   </div>
-                </Section>
-              )
-            )}
+                </div>
+                <div className="flex-1">
+                  <div className="h-3 overflow-hidden rounded-full bg-[#F2F4F6]">
+                    <div
+                      className="h-full rounded-full bg-[#3182F6] transition-all duration-500"
+                      style={{
+                        width: `${(p.sessions / stats.totalSessions) * 100}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="w-24 text-right shrink-0">
+                  {p.cvr > 0 ? (
+                    <span
+                      className={`text-base font-bold number-tabular ${
+                        p.cvr >= 10 ? "text-emerald-600" : "text-amber-500"
+                      }`}
+                    >
+                      찜 {p.cvr.toFixed(1)}%
+                    </span>
+                  ) : (
+                    <span className="text-xs text-[#C9CDD2]">찜 없음</span>
+                  )}
+                  <div className="text-[10px] text-[#C9CDD2] mt-0.5 number-tabular">
+                    CVR
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
-        )}
-
-        {/* 가격 선호도 */}
-        {stats.priceChart.length > 0 && (
-          <Section title="가격 선호도" subtitle="가격 슬라이더 상한가 설정 분포">
-            <div className="h-52">
-              <ResponsiveContainer>
-                <BarChart data={stats.priceChart} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EB" vertical={false} />
-                  <XAxis dataKey="name" stroke="#8B95A1" fontSize={12} tick={{ fill: "#8B95A1" }} />
-                  <YAxis stroke="#8B95A1" fontSize={12} tick={{ fill: "#8B95A1" }} />
-                  <Tooltip
-                    contentStyle={{ borderRadius: 12, border: "1px solid #E5E8EB", fontSize: 12 }}
-                    formatter={(v: number) => [v, "설정 횟수"]}
-                  />
-                  <Bar dataKey="count" fill="#93C5FD" radius={[4, 4, 0, 0]} name="설정 횟수" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Section>
-        )}
-
-        {/* 인사이트 */}
-        <Section title="인사이트" subtitle="수집 데이터 기반 자동 진단">
-          <div className="grid gap-4 md:grid-cols-2">
-            <Insight
-              title={`병목: ${bottleneck.label} (이탈 ${bottleneck.dropoff.toFixed(1)}%)`}
-              body={`이전 단계 대비 ${bottleneck.dropoff.toFixed(1)}%가 다음 단계로 진행하지 않습니다. 해당 화면의 UX와 정보 접근성을 점검하세요.`}
-              tone="danger"
-            />
-            <Insight
-              title={`전체 전환율 ${stats.overallConv.toFixed(1)}% (목표 10%)`}
-              body={
-                stats.overallConv >= 10
-                  ? `목표 달성! ${stats.totalSessions.toLocaleString()}개 세션 기준 양호합니다. 재방문 유도를 강화하세요.`
-                  : `목표까지 ${(10 - stats.overallConv).toFixed(1)}%p 남았습니다. 매물 카드 노출 방식과 찜 버튼 접근성을 개선하세요.`
-              }
-              tone={stats.overallConv >= 10 ? "success" : "info"}
-            />
-            {stats.searchDistChart[0] && (
-              <Insight
-                title={`검색 1위 자치구: ${stats.searchDistChart[0].name}`}
-                body={`${stats.searchDistChart[0].name} 검색이 가장 활발합니다. 해당 지역 매물을 우선 노출하면 전환율 개선에 효과적입니다.`}
-                tone="info"
-              />
-            )}
-            {stats.priceChart.length > 0 ? (
-              <Insight
-                title={`선호 가격대: ${stats.priceChart.sort((a, b) => b.count - a.count)[0]?.name ?? "-"}`}
-                body={`가격 슬라이더 설정 기준으로 ${stats.priceChart.sort((a, b) => b.count - a.count)[0]?.name} 구간이 가장 많이 설정됩니다. 해당 가격대 매물 노출을 강화하세요.`}
-                tone="info"
-              />
-            ) : (
-              <Insight
-                title="가격 선호도 데이터 수집 중"
-                body="검색 페이지 가격 슬라이더 사용 데이터가 쌓이면 선호 가격대 인사이트가 표시됩니다."
-                tone="info"
-              />
-            )}
-          </div>
+          <Insight
+            tone="info"
+            text={
+              stats.pagePerf.find((p) => p.cvr > 0)
+                ? `검색/매물 페이지 CVR ${
+                    (stats.pagePerf.find((p) => p.page === "검색/매물")?.cvr ?? 0).toFixed(1)
+                  }%로 양호. 홈에서 검색으로 더 많이 유입시키는 것이 핵심 전략입니다.`
+                : "아직 찜하기 전환이 발생하지 않았습니다. 데이터가 쌓이면 분석됩니다."
+            }
+          />
         </Section>
 
       </div>
@@ -534,19 +502,22 @@ function AnalyticsPage() {
 // ── 공유 컴포넌트 ──────────────────────────────────────────────────────────────
 
 function Section({
+  label,
   title,
   subtitle,
   children,
 }: {
+  label: string;
   title: string;
   subtitle?: string;
   children: React.ReactNode;
 }) {
   return (
     <section>
-      <div className="mb-5">
-        <h2 className="text-xl font-bold text-[#191F28]">{title}</h2>
-        {subtitle && <p className="mt-0.5 text-sm text-[#8B95A1]">{subtitle}</p>}
+      <div className="mb-4 flex items-baseline gap-2">
+        <span className="text-sm font-bold text-[#3182F6]">{label}</span>
+        <h2 className="text-lg font-bold text-[#191F28]">{title}</h2>
+        {subtitle && <p className="text-sm text-[#8B95A1]">{subtitle}</p>}
       </div>
       <div className="card p-6">{children}</div>
     </section>
@@ -557,12 +528,16 @@ function KPI({
   icon: Icon,
   label,
   value,
+  sub,
   accent,
+  highlight,
 }: {
   icon: React.ElementType;
   label: string;
   value: string;
+  sub?: string;
   accent?: boolean;
+  highlight?: boolean;
 }) {
   return (
     <div className={`card p-5 ${accent ? "border border-[#F04452]/30" : ""}`}>
@@ -570,37 +545,36 @@ function KPI({
         <span className="text-xs font-medium uppercase tracking-wider text-[#8B95A1]">
           {label}
         </span>
-        <Icon className={`h-4 w-4 ${accent ? "text-[#F04452]" : "text-[#8B95A1]"}`} />
+        <Icon
+          className={`h-4 w-4 ${accent ? "text-[#F04452]" : "text-[#8B95A1]"}`}
+        />
       </div>
-      <div className="mt-3 text-2xl font-bold text-[#191F28] number-tabular">{value}</div>
+      <div
+        className={`mt-3 text-2xl font-bold number-tabular ${
+          accent
+            ? "text-[#F04452]"
+            : highlight
+            ? "text-emerald-600"
+            : "text-[#191F28]"
+        }`}
+      >
+        {value}
+      </div>
+      {sub && <div className="mt-1 text-xs text-[#8B95A1]">{sub}</div>}
     </div>
   );
 }
 
-function Insight({
-  title,
-  body,
-  tone,
-}: {
-  title: string;
-  body: string;
-  tone: "danger" | "info" | "success";
-}) {
+function Insight({ text, tone }: { text: string; tone: "danger" | "info" | "success" }) {
   const cls =
     tone === "danger"
-      ? "border-[#F04452]/30 bg-[#F04452]/5"
+      ? "bg-[#FFF5F5] border-[#F04452]/20 text-[#F04452]"
       : tone === "success"
-      ? "border-emerald-500/30 bg-emerald-500/5"
-      : "border-[#3182F6]/30 bg-[#EFF6FF]";
+      ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+      : "bg-[#EFF6FF] border-[#3182F6]/20 text-[#1a56db]";
   return (
-    <div className={`rounded-xl border p-5 ${cls}`}>
-      <div className="flex gap-3">
-        <Lightbulb className="mt-0.5 h-5 w-5 shrink-0 text-[#3182F6]" />
-        <div>
-          <h4 className="font-semibold text-[#191F28]">{title}</h4>
-          <p className="mt-1 text-sm leading-relaxed text-[#8B95A1]">{body}</p>
-        </div>
-      </div>
+    <div className={`mt-4 rounded-xl border px-4 py-3 text-sm ${cls}`}>
+      💡 {text}
     </div>
   );
 }
